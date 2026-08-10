@@ -1,0 +1,15 @@
+# KVKK: ham video, kare ve model agirliklari repoya girmez
+data/
+runs/
+*.mp4
+*.avi
+*.mov
+*.pt
+*.onnx
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/

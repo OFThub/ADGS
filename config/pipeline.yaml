@@ -1,0 +1,18 @@
+# ADGS pipeline yapilandirmasi.
+# source_profile hangi modullerin anlamli oldugunu belirler:
+#   cctv_fixed      -> sabit kamera; homografi sabit; kaza/ihlal modulleri
+#   vehicle_mounted -> araca monte; kare bazli goruntu; yol hasari modulu
+source_profile: vehicle_mounted
+
+# Kare ornekleme. Yol hasarinda 2 fps yeterli (arac ~30 km/s ile ilerler).
+sample_fps: 2.0
+target_long_edge: 1280
+
+# On isleme varsayilan KAPALI. Once ham kareyle mAP olc, dusukse ac.
+# Kor on isleme cogu zaman dogrulugu dusurur.
+on_isleme: false
+
+# KVKK
+saklama_gun: 30
+plaka_bulaniklastir: true
+yuz_bulaniklastir: true

@@ -1,0 +1,25 @@
+[project]
+name = "adgs"
+version = "0.1.0"
+description = "Trafik video analiz sistemi - karar destek araci (Arnavutkoy Belediyesi staj projesi)"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.5",
+    "ultralytics>=8.3",
+    "opencv-python>=4.10",
+    "pyyaml>=6.0",
+    "pydantic>=2.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3"]
+
+[project.scripts]
+adgs = "adgs.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
