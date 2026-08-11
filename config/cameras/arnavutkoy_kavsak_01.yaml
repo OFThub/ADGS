@@ -1,0 +1,49 @@
+# Kamera kalibrasyon SABLONU - Arnavutkoy kavsak 01
+#
+# !!! BU DOSYA HENUZ OLCULMEMISTIR !!!
+# Asagidaki piksel/dunya noktalari ornek degerlerdir. `dogrulama` listesi
+# BILEREK BOS birakilmistir; bu sayede calib.yukle() kalibrasyonu REDDEDER
+# (gecerli=False) ve hiza bagli tum moduller kapali kalir.
+#
+# Sahada yapilacaklar:
+#   1. Kameradan bir kare al, yer duzleminde 4 nokta sec (kavsak koseleri,
+#      yaya gecidi cizgi uclari gibi kalici isaretler).
+#   2. Bu 4 noktanin gercek mesafelerini metreyle olc, dunya koordinatina yaz.
+#   3. FIT ICIN KULLANILMAYAN ayri bir mesafe olc (or. yaya gecidi serit
+#      araligi) ve `dogrulama` listesine ekle. Ayni noktalarla dogrulama
+#      yapmak sifira yakin hata verir ve hicbir sey kanitlamaz.
+#   4. `adgs calibrate --camera arnavutkoy_kavsak_01 --verify` calistir.
+#      Hata %10'un altinda degilse noktalari yeniden olc - esigi yukseltme.
+
+camera_id: arnavutkoy_kavsak_01
+kaynak_profil: cctv_fixed
+
+# Faz 2 kabul kriteri: geri donusum hatasi < %10
+maks_hata_yuzde: 10.0
+
+homografi:
+  # Goruntudeki piksel koordinatlari (x, y) - ORNEK DEGERLER
+  piksel:
+    - [320, 880]
+    - [1560, 880]
+    - [1180, 520]
+    - [700, 520]
+  # Ayni noktalarin yer duzlemindeki metre koordinatlari (X, Y) - ORNEK
+  dunya:
+    - [0.0, 0.0]
+    - [12.0, 0.0]
+    - [12.0, 25.0]
+    - [0.0, 25.0]
+
+# Fit icin kullanilmayan bagimsiz olcumler. BOS = kalibrasyon reddedilir.
+# Ornek doldurulmus hali:
+#   - piksel: [[700, 700], [980, 700]]
+#     gercek_m: 3.5
+#     aciklama: "yaya gecidi serit araligi"
+dogrulama: []
+
+# Kirmizi isik ihlali icin dur cizgisi (Faz 4a'da kullanilacak)
+dur_cizgisi: null
+
+# Ilgi alani - disindaki tespitler elenir (bos = tum kare)
+roi: null

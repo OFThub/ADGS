@@ -1,0 +1,36 @@
+# SENTETIK DEMO KAMERASI - GERCEK OLCUM DEGILDIR
+#
+# Amaci tek sey: kalibrasyonun GECERLI oldugu kod yolunu (dunya koordinati
+# uretimi, hiz hesabi) uctan uca calistirabilmek. Sayilar bir sahadan
+# olculmemistir; 640 piksel = 10 metre kabul eden yapay bir duzlemdir.
+#
+# GERCEK VIDEODA KULLANMAYIN. Gercek kamera icin arnavutkoy_kavsak_01.yaml
+# sablonunu sahada olcup doldurun.
+#
+# Not: dogrulama noktasi burada fit noktalariyla ayni duzlemden turetildigi
+# icin hata ~0 cikar. Gercek kalibrasyonda dogrulama BAGIMSIZ olcum olmalidir;
+# aksi halde test hicbir sey kanitlamaz (bkz. calib.py modul basligi).
+
+camera_id: demo_sentetik
+kaynak_profil: cctv_fixed
+maks_hata_yuzde: 10.0
+
+homografi:
+  piksel:
+    - [0, 0]
+    - [640, 0]
+    - [640, 640]
+    - [0, 640]
+  dunya:
+    - [0.0, 0.0]
+    - [10.0, 0.0]
+    - [10.0, 10.0]
+    - [0.0, 10.0]
+
+dogrulama:
+  - piksel: [[0, 0], [320, 0]]
+    gercek_m: 5.0
+    aciklama: "SENTETIK - 320 piksel = 5 m kabulu"
+
+dur_cizgisi: null
+roi: null

@@ -6,6 +6,10 @@ requires-python = ">=3.12"
 dependencies = [
     "torch>=2.5",
     "ultralytics>=8.3",
+    # BoT-SORT/ByteTrack lineer atama cozucusu. Ultralytics bunu opsiyonel
+    # birakiyor ama model.track() onsuz calismaz - hem M2 takip hem M5 yol
+    # hasari tekillestirmesi buna bagli.
+    "lap>=0.5",
     "opencv-python>=4.10",
     "pyyaml>=6.0",
     "pydantic>=2.9",
@@ -20,6 +24,11 @@ adgs = "adgs.cli:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+# Flat-layout otomatik kesfi data/, config/, training/ dizinlerini de paket
+# sanip build'i durduruyor. Tek gercek paket adgs.
+[tool.setuptools]
+packages = ["adgs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
