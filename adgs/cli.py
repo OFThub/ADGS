@@ -80,32 +80,160 @@ def doctor() -> int:
     return 0 if ok else 1
 
 
-def run(video: str, model: str, out: str, profile: str, conf: float) -> int:
-    """Faz 1 boru hatti: video -> yol hasari -> isaretli MP4 + JSON rapor."""
-    from adgs import render, roaddamage
+def _video_fps(video: Path) -> float:
+    import cv2
+
+    cap = cv2.VideoCapture(str(video))
+    try:
+        return cap.get(cv2.CAP_PROP_FPS) or 25.0
+    finally:
+        cap.release()
+
+
+def _klip_ekle(events: list, src: Path, outdir: Path) -> None:
+    """Her olaya klip kaniti ekler. Kanitsiz olay rapora zaten yazilmaz."""
+    from adgs import render
+
+    for e in events:
+        klip = render.save_clip(src, e.frame_start, e.frame_end,
+                                outdir / "klipler" / f"{e.event_id}.mp4")
+        if klip:
+            e.evidence["clip"] = str(klip)
+
+
+def _tarih_coz(metin: str | None):
+    """--tarih degerini date'e cevirir. Verilmezse None (ceza hesaplanmaz).
+
+    Bilerek bugune DUSULMEZ: arsiv videosu bugunun ceza tablosuyla hesaplanirsa
+    sessizce yanlis tutar uretilir.
+    """
+    from datetime import date
+
+    if not metin:
+        return None
+    try:
+        return date.fromisoformat(metin)
+    except ValueError as e:
+        raise SystemExit(f"[FAIL] --tarih ISO bicimde olmali (YYYY-AA-GG): {e}") from e
+
+
+def run(video: str, model: str, out: str, profile: str, conf: float,
+        detect_tipleri: str = "roaddamage", track_model: str = "yolo26s.pt",
+        camera: str | None = None, rules: str | None = None,
+        tarih_metni: str | None = None,
+        damage_model: str = "runs/cardd/yolo26s/weights/best.pt") -> int:
+    """Video isleme boru hatti: yol hasari (F1), kaza (F3), ihlal (F4),
+    kusur + ceza (F5), arac hasari (F6)."""
+    from adgs import render
+    from adgs import violations as m4
 
     src = Path(video)
     if not src.exists():
         print(f"[FAIL] video bulunamadi: {src}")
         return 1
-    if not Path(model).exists():
-        print(f"[FAIL] model bulunamadi: {model}")
-        print("       Once egitim: python training/train_rdd2022.py")
+    tarih = _tarih_coz(tarih_metni)
+
+    tipler = {t.strip() for t in detect_tipleri.split(",") if t.strip()}
+    ihlal_adlari = set(m4.KAYIT)
+    gecersiz = tipler - ({"roaddamage", "accident", "ihlal"} | ihlal_adlari)
+    if gecersiz:
+        print(f"[FAIL] bilinmeyen tespit tipi: {sorted(gecersiz)}")
+        print(f"       gecerli: roaddamage, accident, ihlal, {', '.join(sorted(ihlal_adlari))}")
         return 1
 
     outdir = Path(out)
-    print(f"Tespit calisiyor: {src.name}")
-    events = roaddamage.detect(src, model, conf=conf, source_profile=profile)
+    events: list = []
+    uyarilar: list[str] = []
+
+    if "roaddamage" in tipler:
+        from adgs import roaddamage
+
+        if not Path(model).exists():
+            print(f"[FAIL] yol hasari modeli bulunamadi: {model}")
+            print("       Once egitim: python training/train_rdd2022.py")
+            return 1
+        print(f"Yol hasari taraniyor: {src.name}")
+        events += roaddamage.detect(src, model, conf=conf, source_profile=profile)
+
+    ihlal_istendi = "ihlal" in tipler or bool(tipler & ihlal_adlari)
+    if "accident" in tipler or ihlal_istendi:
+        from adgs import accident, calib
+        from adgs import detect as m2
+
+        k = calib.yukle(_kamera_yolu(camera)) if camera else None
+        if k is not None and not k.gecerli:
+            uyarilar.append(
+                "kalibrasyon gecersiz - hiz/mesafe modulleri kapali, "
+                "kazada okluzyon filtresi uygulanmiyor"
+            )
+        # M2 TEK KEZ calisir. Kaza ve ihlal ayni iz listesini okur: ikinci bir
+        # takip kosusu farkli track_id uretebilir ve ayni arac iki raporda iki
+        # farkli numarayla gorunurdu (plan, veri akisi kurali 1).
+        print(f"Tespit + takip: {src.name}")
+        izler = m2.kisa_izleri_ele(
+            m2.takip_et(src, model_path=track_model, kalib=k, conf=conf)
+        )
+        fps = _video_fps(src)
+
+        if "accident" in tipler:
+            kazalar = accident.tespit_et(izler, fps, str(src),
+                                         source_profile=profile, kalib=k)
+            _klip_ekle(kazalar, src, outdir)
+            # M8 - arac hasari (Faz 6). Arac kirpmasi cok kucukse sinif bazli
+            # cikti URETILMEZ; sebep uyarilara yazilir.
+            from adgs import vehicledamage as m8
+
+            uyarilar += m8.degerlendir(src, kazalar, izler, model_path=damage_model,
+                                       conf=conf)
+            events += kazalar
+
+        if ihlal_istendi:
+            ctx = m4.Baglam(
+                video=src, fps=fps, source_profile=profile, kalib=k,
+                kamera=m4.kamera_yukle(_kamera_yolu(camera)) if camera else {},
+                kural=m4.kural_yukle(rules),
+            )
+            secili = None if "ihlal" in tipler else sorted(tipler & ihlal_adlari)
+            ihlaller = m4.tespit_et(izler, ctx, secili)
+            _klip_ekle(ihlaller, src, outdir)
+            events += ihlaller
+            uyarilar += ctx.uyarilar
+
+    # M6 + M7 - GPU'suz, saf. ALTYAPI olaylari dokunulmadan gecer (belediyenin
+    # kendi gorev alani; kusur/ceza dogurmaz).
+    from adgs import fault, penalty
+
+    try:
+        fault.uygula(events)
+    except FileNotFoundError as e:
+        # Kusur tablosu olmadan siniflandirma her ihlali TALI yapardi. Yol
+        # hasari sonuclari yine de yazilir; eksik oldugu acikca soylenir.
+        uyarilar.append(f"kusur motoru calismadi: {e}")
+    penalty.uygula(events, olay_tarihi=tarih)
 
     mp4 = render.annotate_video(src, events, outdir / f"{src.stem}_annotated.mp4")
-    js = render.write_report(events, outdir / "rapor.json", source=str(src))
+    js = render.write_report(events, outdir / "rapor.json", source=str(src),
+                             uyarilar=uyarilar)
 
     print()
-    print(f"{len(events)} olay (tekillestirilmis, track_id basina bir kayit)")
+    print(f"{len(events)} olay")
+    for tip in ("ALTYAPI", "KAZA", "IHLAL"):
+        n = sum(1 for e in events if e.tip == tip)
+        if n:
+            print(f"  {tip}: {n}")
+    for kod in sorted({e.alt_tip for e in events if e.tip == "IHLAL"}):
+        print(f"    {kod}: {sum(1 for e in events if e.alt_tip == kod)}")
     for s in ("YUKSEK", "ORTA", "DUSUK"):
         n = sum(1 for e in events if f"siddet {s}" in " ".join(e.notes))
         if n:
-            print(f"  {s}: {n}")
+            print(f"  siddet {s}: {n}")
+
+    # "0 ihlal" ile "3 dedektor bakamadi, 0 ihlal" ayni sey degil - susmak yasak.
+    if uyarilar:
+        print("\nCALISAMAYAN / KISITLI MODULLER:")
+        for u in uyarilar:
+            print(f"  ! {u}")
+
     print()
     print(f"Video : {mp4}")
     print(f"Rapor : {js}")
@@ -201,7 +329,66 @@ def evaluate(model: str, data: str, imgsz: int, batch: int, hedef: float) -> int
     return 0 if ok else 1
 
 
+def explain(rapor: str, event_id: str | None) -> int:
+    """Bir olayin kusur/ceza gerekcesini insan okunur bicimde yazar (Faz 5).
+
+    Amaci denetlenebilirlik: hangi maddeye neden baglandigi, hangi tablodan
+    hesaplandigi ve hangi sinirlarin gecerli oldugu tek ekranda gorulmeli.
+    """
+    import json
+
+    p = Path(rapor)
+    if not p.exists():
+        print(f"[FAIL] rapor bulunamadi: {p}")
+        return 1
+    veri = json.loads(p.read_text(encoding="utf-8"))
+    olaylar = veri.get("events") or []
+    if event_id:
+        olaylar = [e for e in olaylar if e.get("event_id") == event_id]
+        if not olaylar:
+            print(f"[FAIL] olay bulunamadi: {event_id}")
+            return 1
+
+    for evt in olaylar:
+        print("=" * 72)
+        print(f"{evt['event_id']}  {evt['tip']} / {evt['alt_tip']}  "
+              f"conf={evt['conf']}  kare {evt['frame_start']}-{evt['frame_end']}")
+        for taraf in evt.get("parties") or []:
+            plaka = taraf.get("plate") or "-"
+            print(f"  iz #{taraf['track_id']} (plaka {plaka})")
+            if not taraf.get("violations"):
+                # Bos birakmak "kusursuz" gibi okunur; acikca yazilir.
+                print("    TESPIT_EDILEMEDI - ihlal cikarilamadi (KUSURSUZ DEGIL)")
+                continue
+            for v in taraf["violations"]:
+                madde = v.get("ktk_madde") or "m.84 disinda"
+                print(f"    {v['ihlal_kodu']}  ->  KTK {madde}  "
+                      f"[{v.get('kusur_sinifi') or '?'}]")
+                tutar = v.get("ceza_tutari_try")
+                if tutar is None:
+                    print("      ceza: HESAPLANMADI (bkz. notlar)")
+                else:
+                    puan = v.get("ceza_puani")
+                    print(f"      ceza: {tutar} TL"
+                          + (f", {puan} ceza puani" if puan is not None else "")
+                          + f"  (tablo {v.get('ceza_tablosu_tarihi')})")
+        print("  --- notlar ---")
+        for n in evt.get("notes") or []:
+            print(f"  * {n}")
+    if not olaylar:
+        print("Raporda olay yok.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    # Windows konsolu cp1254'tur; rapordaki Turkce notlar (kusur gerekcesi,
+    # on-degerlendirme uyarisi) oraya basilinca bozulur. Hukuki gerekcenin
+    # okunamaz cikmasi kabul edilemez - stdout UTF-8'e alinir.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass  # yonlendirilmis/eski akis - ASCII ciktilar yine calisir
+
     parser = argparse.ArgumentParser(
         prog="adgs",
         description="Trafik video analiz sistemi - karar destek araci (baglayici degildir)",
@@ -210,13 +397,30 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("doctor", help="Ortam ve yapilandirma kontrolu")
 
-    r = sub.add_parser("run", help="Videoyu isle (Faz 1: yol hasari)")
+    r = sub.add_parser("run", help="Videoyu isle (yol hasari ve/veya kaza)")
     r.add_argument("video")
-    r.add_argument("--model", default="runs/rdd2022/yolo26s/weights/best.pt")
+    r.add_argument("--model", default="runs/rdd2022/yolo26s/weights/best.pt",
+                   help="Yol hasari modeli")
     r.add_argument("--out", default="runs/f1")
     r.add_argument("--profile", default="vehicle_mounted",
                    choices=["vehicle_mounted", "cctv_fixed"])
     r.add_argument("--conf", default=0.35, type=float)
+    r.add_argument("--detect", default="roaddamage",
+                   help="Virgulle ayrilmis: roaddamage, accident, ihlal (config'te "
+                        "aktif tum ihlaller) veya tek tek redlight, wrongway, "
+                        "parking, lane, tailgating, speed")
+    r.add_argument("--track-model", default="yolo26s.pt",
+                   help="Kaza/ihlal tespiti icin arac/yaya modeli")
+    r.add_argument("--camera", default=None,
+                   help="config/cameras/<ad>.yaml - kalibrasyon ve ihlal geometrisi")
+    r.add_argument("--rules", default=None,
+                   help="Ihlal esikleri (varsayilan config/rules/violations.yaml)")
+    r.add_argument("--damage-model", default="runs/cardd/yolo26s/weights/best.pt",
+                   help="CarDD arac hasari modeli (Faz 6). Yoksa hasar "
+                        "degerlendirmesi yapilmaz, sebep raporlanir")
+    r.add_argument("--tarih", default=None, metavar="YYYY-AA-GG",
+                   help="Videonun cekildigi tarih. Ceza tablosu buna gore secilir; "
+                        "verilmezse ceza HESAPLANMAZ (bugune dusulmez)")
 
     c = sub.add_parser("calibrate", help="Kamera kalibrasyonunu dogrula (Faz 2)")
     c.add_argument("--camera", required=True)
@@ -243,13 +447,21 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--hedef", default=0.45, type=float,
                    help="Faz 1 yol hasari kabul esigi")
 
+    x = sub.add_parser("explain", help="Bir olayin kusur/ceza gerekcesi (Faz 5)")
+    x.add_argument("rapor", help="runs/<kosu>/rapor.json")
+    x.add_argument("--event", default=None, help="Tek olay; verilmezse hepsi")
+
     args = parser.parse_args(argv)
     if args.cmd == "eval":
         return evaluate(args.model, args.data, args.imgsz, args.batch, args.hedef)
     if args.cmd == "doctor":
         return doctor()
     if args.cmd == "run":
-        return run(args.video, args.model, args.out, args.profile, args.conf)
+        return run(args.video, args.model, args.out, args.profile, args.conf,
+                   args.detect, args.track_model, args.camera, args.rules,
+                   args.tarih, args.damage_model)
+    if args.cmd == "explain":
+        return explain(args.rapor, args.event)
     if args.cmd == "calibrate":
         return calibrate(args.camera, args.verify)
     if args.cmd == "track":

@@ -42,8 +42,35 @@ homografi:
 #     aciklama: "yaya gecidi serit araligi"
 dogrulama: []
 
-# Kirmizi isik ihlali icin dur cizgisi (Faz 4a'da kullanilacak)
-dur_cizgisi: null
-
 # Ilgi alani - disindaki tespitler elenir (bos = tum kare)
 roi: null
+
+# --- Faz 4: ihlal geometrisi ------------------------------------------------
+# HEPSI BOS. Her biri ilgili dedektorun on kosuludur; bos kaldigi surece o
+# dedektor CALISMAYI REDDEDER ve sebebini uyari olarak basar. Bu kasitlidir:
+# olculmemis bir dur cizgisi veya serit yonu yanlis ihlal kaydi uretir.
+
+# Kirmizi isik icin: dur cizgisinin iki ucu (piksel) ve isik lambasi ROI'si.
+#   dur_cizgisi: [[420, 760], [1480, 740]]
+#   isik_roi: [1290, 210, 1330, 290]     # x1, y1, x2, y2
+dur_cizgisi: null
+isik_roi: null
+
+# Ters yon ve serit ihlali icin: her seridin poligonu ve GORUNTU UZAYINDAKI
+# yon vektoru (dogru akis yonu). Yon vektoru ters girilirse tum serit ters yon
+# olarak isaretlenir - once bir videoda gozle dogrulayin.
+#   seritler:
+#     - ad: "kuzey_gidis"
+#       poligon: [[420, 760], [900, 760], [820, 520], [640, 520]]
+#       yon: [-0.1, -1.0]
+seritler: []
+
+# Hatali park icin: yasak park poligonlari.
+#   yasak_park:
+#     - ad: "durak_onu"
+#       poligon: [[100, 820], [340, 820], [330, 900], [90, 900]]
+yasak_park: []
+
+# Hiz ihlali icin: bu kesitin yasal limiti. Tanimsizsa modul calismaz.
+# Limit trafik levhasindan dogrulanmalidir - varsayilan deger KULLANMAYIN.
+hiz_limiti_kmh: null

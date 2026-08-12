@@ -1,0 +1,50 @@
+# M7 — Ceza tablosu. DOSYA ADI = GEÇERLİLİK BAŞLANGIÇ TARİHİDİR.
+#
+# Motor, olayın tarihinde geçerli olan tabloyu seçer. Geçmiş tarihli bir video
+# bugünün tablosuyla değil, çekildiği tarihin tablosuyla hesaplanır.
+#
+# Tutarlar KODA GÖMÜLMEZ. adgs/penalty.py içinde tek bir dört haneli sayı bile
+# yoktur; bu, tests/test_penalty.py içindeki grep testiyle doğrulanır.
+#
+# !!! BU TABLO HENÜZ DOĞRULANMAMIŞTIR !!!
+# dogrulama_tarihi ve dogrulayan boş olduğu sürece motor her çıktıya
+# "ceza tablosu doğrulanmamıştır" notunu ekler. Doldurmadan operasyonel
+# kullanmayın: 2026'da tutarlar iki kez değişti.
+
+meta:
+  gecerlilik_baslangic: "2026-02-27"
+  kaynak: "EGM Trafik Başkanlığı — Trafik Ceza Rehberi (trafik.gov.tr/mevzuat)"
+  dayanak: >-
+    Resmî Gazete 27.02.2026 tarihli kanun değişikliği + 2026 yeniden değerleme
+    oranı (%32,49)
+  dogrulama_tarihi: null      # resmî rehberle karşılaştıran doldurur
+  dogrulayan: null
+  not: >-
+    Erken ödeme indirimi HESAPLANMAZ. İndirim tebliğ tarihine bağlıdır ve video
+    bunu bilemez.
+
+# Tabloda karşılığı olmayan ihlal için hesaplama YAPILMAZ; None döner ve olay
+# notlarına sebebi yazılır. Sessizce sıfır veya tahmin üretilmez.
+cezalar:
+  - ihlal_kodu: KIRMIZI_ISIK
+    ktk_madde: "47/1-c"
+    tutar_try: 5000
+    ceza_puani: 20
+
+  - ihlal_kodu: TERS_YON
+    ktk_madde: "56"
+    tutar_try: 90000
+    ceza_puani: 20
+
+  - ihlal_kodu: PLAKA_OKUNMAZ
+    ktk_madde: "30"
+    tutar_try: 140000
+    ceza_puani: null
+
+# --- Eklenmesi gerekenler ---------------------------------------------------
+# Aşağıdaki M4 kodlarının tutarları resmî rehberden aktarılmalıdır. Kasıtlı
+# olarak boş bırakıldı: uydurulmuş bir tutar, eksik tutardan çok daha zararlı.
+#   HIZ_IHLALI       (aşım yüzdesine göre kademeli — tek satır yetmez)
+#   TAKIP_MESAFESI
+#   HATALI_PARK
+#   SERIT_IHLALI

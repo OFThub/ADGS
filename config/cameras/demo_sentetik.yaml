@@ -32,5 +32,29 @@ dogrulama:
     gercek_m: 5.0
     aciklama: "SENTETIK - 320 piksel = 5 m kabulu"
 
-dur_cizgisi: null
 roi: null
+
+# --- Faz 4 geometrisi (SENTETIK) --------------------------------------------
+# Bu blok, ihlal dedektorlerinin gecerli-geometri kod yolunu calistirmak icin
+# vardir. 64 piksel = 1 m kabulune dayanir. GERCEK SAHA OLCUMU DEGILDIR.
+
+# Kirmizi isik: dur cizgisi (parca) ve isik lambasinin ROI'si.
+dur_cizgisi: [[0, 400], [640, 400]]
+isik_roi: [10, 10, 60, 60]      # x1, y1, x2, y2
+
+# Ters yon / serit: poligon + goruntu uzayinda yon vektoru.
+seritler:
+  - ad: "sol_serit_asagi"
+    poligon: [[0, 0], [320, 0], [320, 640], [0, 640]]
+    yon: [0, 1]                 # +y (asagi) dogru yon
+  - ad: "sag_serit_yukari"
+    poligon: [[320, 0], [640, 0], [640, 640], [320, 640]]
+    yon: [0, -1]
+
+# Hatali park: yasak park poligonlari.
+yasak_park:
+  - ad: "kose_yasak_alan"
+    poligon: [[560, 560], [640, 560], [640, 640], [560, 640]]
+
+# Hiz ihlali: limit tanimli degilse modul calismaz.
+hiz_limiti_kmh: 50

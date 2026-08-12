@@ -72,6 +72,48 @@ def annotate_video(video: str | Path, events: list[Event], out_path: str | Path)
     return out_path
 
 
+def save_clip(video: str | Path, frame_start: int, frame_end: int,
+              out_path: str | Path, tampon: int = 15) -> Path | None:
+    """Olay araligini ayri bir MP4 olarak kesip yazar. Kare yazilamazsa None.
+
+    ponytail: OpenCV ile yeniden kodlar (kalite/hiz kaybi). ffmpeg -ss ile
+    kodlamadan kesmek daha iyi olurdu; ffmpeg zorunlu bagimlilik olmasin diye
+    gecildi - klip sayisi artarsa ffmpeg'e gecilmeli.
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        raise FileNotFoundError(f"video acilamadi: {video}")
+    yazilan = 0
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        bas = max(0, frame_start - tampon)
+        son = frame_end + tampon
+        cap.set(cv2.CAP_PROP_POS_FRAMES, bas)
+        writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"),
+                                 fps, (w, h))
+        try:
+            for _ in range(son - bas + 1):
+                ok, img = cap.read()
+                if not ok:
+                    break
+                cv2.putText(img, _FILIGRAN, (8, h - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                writer.write(img)
+                yazilan += 1
+        finally:
+            writer.release()
+    finally:
+        cap.release()
+    if yazilan == 0:
+        out_path.unlink(missing_ok=True)
+        return None
+    return out_path
+
+
 # Sinif basina sabit renk - ayni arac tum videoda ayni renkte gorunur.
 _SINIF_RENK = {
     "otomobil": (0, 200, 0), "kamyon": (0, 140, 255), "otobus": (0, 200, 200),
@@ -165,8 +207,14 @@ def write_tracks(izler: list, out_path: str | Path, source: str = "",
     return out_path
 
 
-def write_report(events: list[Event], out_path: str | Path, source: str = "") -> Path:
-    """Olaylari JSON'a yazar. Kanitsiz olaylar rapora GIRMEZ."""
+def write_report(events: list[Event], out_path: str | Path, source: str = "",
+                 uyarilar: list[str] | None = None) -> Path:
+    """Olaylari JSON'a yazar. Kanitsiz olaylar rapora GIRMEZ.
+
+    `uyarilar` rapora yazilir cunku "0 ihlal" ile "3 dedektor calismayi
+    reddetti, 0 ihlal" ayni sey degildir. Ikincisini gizlemek raporu yaniltici
+    yapar - okuyan kisi bakilmayan seyleri "yok" sanir.
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     kanitli = [e for e in events if e.kanitli_mi()]
@@ -174,6 +222,7 @@ def write_report(events: list[Event], out_path: str | Path, source: str = "") ->
         "kaynak": source,
         "olay_sayisi": len(kanitli),
         "kanitsiz_atlanan": len(events) - len(kanitli),
+        "calisamayan_moduller": list(uyarilar or []),
         "uyari": "Bu rapor bir karar destek ciktisidir; baglayici bir tespit degildir.",
         "events": [asdict(e) for e in kanitli],
     }

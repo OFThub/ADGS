@@ -1,0 +1,63 @@
+# M4 — trafik ihlali tetikleme eşikleri.
+#
+# `aktif` anahtarları CLI adlarıdır (`adgs run --detect redlight,wrongway`).
+# Eşik blokları rapora yazılan ihlal koduyla anahtarlanır (KIRMIZI_ISIK, ...)
+# — böylece bir raporda gördüğünüz kodu doğrudan burada arayabilirsiniz.
+#
+# ÖNEMLİ: Bir tipi burada açmak, gerekli kamera geometrisini tanımladığınız
+# anlamına gelmez. Geometri eksikse modül tahmin ÜRETMEZ; çalışmayı reddeder
+# ve sebebini uyarı olarak basar.
+
+aktif:
+  redlight: true      # KIRMIZI_ISIK   — dur_cizgisi + isik_roi gerekir
+  wrongway: true      # TERS_YON       — seritler[].yon gerekir
+  parking: true       # HATALI_PARK    — yasak_park[].poligon gerekir
+  tailgating: true    # TAKIP_MESAFESI — DOĞRULANMIŞ kalibrasyon gerekir
+  speed: true         # HIZ_IHLALI     — DOĞRULANMIŞ kalibrasyon + hiz_limiti_kmh
+  # Şerit ihlali varsayılan KAPALI: KTK m.55 sinyalsiz şerit değişimini yasaklar,
+  # sabit CCTV mesafesinde sinyal lambası güvenilir okunamaz. Açılırsa çıktı bir
+  # ihlal tespiti değil, insan incelemesi için adaydır. Bkz. violations/lane.py
+  lane: false         # SERIT_IHLALI
+
+KIRMIZI_ISIK:
+  # Işık ROI'sinde bu kadar "yanan" piksel yoksa durum BELIRSIZ olur;
+  # KIRMIZI varsayılmaz.
+  isik_min_piksel: 20
+  # Geçişten sonra ilerlemeye devam kontrolü. Çizgiyi bir tekerlek boyu aşıp
+  # duran araç ihlal değildir — ihlal, kırmızıda kavşağa girmektir.
+  devam_pencere_kare: 8
+  devam_piksel: 12.0
+
+TERS_YON:
+  aci_esik_derece: 120.0
+  pencere_kare: 5
+  # Tek karelik sapma yetmez: manevra ve takip gürültüsü 180° görünebilir.
+  min_ardisik_kare: 8
+  min_kayma_piksel: 3.0
+
+HATALI_PARK:
+  # Duraklama ile park arasındaki fark süredir. Bu eşiği düşürmek, kırmızı
+  # ışıkta bekleyen her aracı ihlal yapar.
+  sure_sn: 60.0
+  kayma_piksel: 8.0
+
+TAKIP_MESAFESI:
+  guvenli_sn: 2.0
+  pencere_kare: 10
+  min_ardisik_kare: 5
+  # Sıkışıklıkta beklemek takip mesafesi ihlali değildir.
+  min_hiz_kmh: 20.0
+  maks_mesafe_m: 50.0
+  yon_uyum_derece: 30.0
+  maks_yanal_m: 2.5      # yan şeritteki araç "önümdeki araç" değildir
+
+HIZ_IHLALI:
+  # Müsamaha değil, ölçüm belirsizliği payı: kalibrasyon hatası %10'a kadar
+  # kabul edildiği için eşik de o kadar yukarı taşınır.
+  tolerans_yuzde: 10.0
+  pencere_kare: 10
+  min_ardisik_kare: 5
+
+SERIT_IHLALI:
+  pencere_kare: 25
+  min_gecis: 2

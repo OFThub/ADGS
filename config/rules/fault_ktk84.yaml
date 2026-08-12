@@ -1,0 +1,117 @@
+# M6 — Kusur sınıflandırma tablosu (2918 sayılı KTK m.84).
+#
+# Madde 84 asli kusur hâllerini **kapalı liste** olarak sayar: listede olmayan
+# hiçbir ihlal asli kusur değildir. Motor bu yüzden yalnızca eşleşme arar;
+# eşleşme yoksa TALI, hiç ihlal yoksa TESPIT_EDILEMEDI döner.
+#
+# TESPIT_EDILEMEDI "KUSURSUZ" DEMEK DEĞİLDİR. Görüntüde ihlal görülmemiş
+# olması, ihlal olmadığını göstermez.
+#
+# Bu tablo YÜZDE ÜRETMEZ. Karayolları Trafik Yönetmeliği m.156/3 uyarınca
+# tutanağı düzenleyen görevli bile kusur oranı belirtmez; oranı TRAMER belirler.
+#
+# Metin doğrulaması: madde 12 bent (a–l) içerir; iki bağımsız kaynaktan
+# karşılaştırılarak aktarılmıştır (12.08.2026). Operasyonel kullanımdan önce
+# mevzuat.gov.tr konsolide metniyle son kez karşılaştırılıp meta doldurulmalı.
+meta:
+  dayanak: "2918 sayılı Karayolları Trafik Kanunu m.84"
+  bent_sayisi: 12
+  dogrulama_tarihi: null      # mevzuat.gov.tr ile karşılaştıran doldurur
+  dogrulayan: null
+
+# KTK m.84 — "Araç sürücüleri trafik kazalarında ... hâllerinde asli kusurlu
+# sayılırlar."
+asli_kusur_halleri:
+  - kod: KTK_84_A
+    madde: "84/a"
+    ihlal_kodu: KIRMIZI_ISIK
+    tanim: "Kırmızı ışıklı trafik işaretinde veya yetkili memurun dur işaretinde geçme"
+
+  - kod: KTK_84_B
+    madde: "84/b"
+    ihlal_kodu: TERS_YON
+    tanim: >-
+      Taşıt giremez trafik işareti bulunan karayoluna veya bölünmüş karayolunda
+      karşı yönden gelen trafiğin kullandığı şerit, rampa ve bağlantı yollarına girme
+
+  - kod: KTK_84_C
+    madde: "84/c"
+    ihlal_kodu: KARSI_SERIDE_GECME
+    tanim: >-
+      İkiden fazla şeritli taşıt yollarında, karşı yönden gelen trafiğin
+      kullandığı şerit veya yol bölümüne girme
+
+  - kod: KTK_84_D
+    madde: "84/d"
+    ihlal_kodu: ARKADAN_CARPMA
+    tanim: "Arkadan çarpma"
+
+  - kod: KTK_84_E
+    madde: "84/e"
+    ihlal_kodu: GECME_YASAGI_IHLALI
+    tanim: "Geçme yasağı olan yerlerde geçme"
+
+  - kod: KTK_84_F
+    madde: "84/f"
+    ihlal_kodu: HATALI_DONUS
+    tanim: "Doğrultu değiştirme manevralarını yanlış yapma"
+
+  - kod: KTK_84_G
+    madde: "84/g"
+    ihlal_kodu: SERIDE_TECAVUZ
+    tanim: "Şeride tecavüz etme"
+
+  - kod: KTK_84_H
+    madde: "84/h"
+    ihlal_kodu: KAVSAK_GECIS_ONCELIGI
+    tanim: "Kavşaklarda geçiş önceliğine uymama"
+
+  - kod: KTK_84_I
+    madde: "84/i"
+    ihlal_kodu: DAR_KAPLAMA_GECIS_ONCELIGI
+    tanim: "Kaplamanın dar olduğu yerlerde geçiş önceliğine uymama"
+
+  - kod: KTK_84_J
+    madde: "84/j"
+    ihlal_kodu: HATALI_MANEVRA
+    tanim: "Manevraları düzenleyen genel şartlara uymama"
+
+  - kod: KTK_84_K
+    madde: "84/k"
+    ihlal_kodu: YERLESIM_DISI_PARK
+    tanim: >-
+      Yerleşim birimleri dışındaki karayolunun taşıt yolu üzerinde park etme
+      veya duraklama
+
+  - kod: KTK_84_L
+    madde: "84/l"
+    ihlal_kodu: PARK_HALINDEKI_ARACA_CARPMA
+    tanim: >-
+      Park için ayrılmış yerlerde veya taşıt yolu dışında kurallara uygun olarak
+      park edilmiş araçlara çarpma
+
+# Listede eşleşme bulunamayan ama tespit edilmiş ihlaller.
+varsayilan_sinif: TALI
+
+# Hiç ihlal tespit edilemeyen taraf. "KUSURSUZ" DEĞİL.
+ihlal_yoksa: TESPIT_EDILEMEDI
+
+# --- M4 kodlarının bilinçli olarak ASLİ'ye bağlanMAdığı yerler ---------------
+# Aşağıdakiler hata değil, karardır. Yanlış bir asli kusur ataması bir
+# vatandaşın adına yanlış bir kayıt üretir.
+kasitli_eslesmeyenler:
+  - ihlal_kodu: HATALI_PARK
+    sebep: >-
+      84/k YALNIZCA "yerleşim birimleri DIŞINDAKİ karayolu" için asli kusur
+      sayar. M4'ün tespit ettiği şehir içi hatalı park bu kapsamda değildir;
+      TALI kalır. Yerleşim dışı için ayrı kod (YERLESIM_DISI_PARK) vardır.
+  - ihlal_kodu: SERIT_IHLALI
+    sebep: >-
+      84/g "şeride tecavüz"tür; M4'ün tespit ettiği ise sinyali doğrulanamamış
+      şerit DEĞİŞİMİdir. İkisi aynı şey değildir, TALI kalır.
+  - ihlal_kodu: HIZ_IHLALI
+    sebep: "Hız aşımı m.84'ün kapalı listesinde yer almaz; TALI kalır."
+  - ihlal_kodu: TAKIP_MESAFESI
+    sebep: >-
+      Takip mesafesi m.84'te sayılmaz; TALI kalır. Çarpışma gerçekleştiyse asli
+      kusuru doğuran ARKADAN_CARPMA (84/d) ayrıca tespit edilmelidir.
