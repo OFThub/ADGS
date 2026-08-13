@@ -48,11 +48,15 @@ def takip_et(
     conf: float = 0.35,
     tracker: str = "botsort.yaml",
     siniflar: set[str] | None = None,
+    maks_kare: int | None = None,
 ) -> list[Track]:
     """Videoyu takip eder, kalici ID'li Track listesi dondurur.
 
     `kalib` verilir ve gecerliyse her karede dunya koordinati da doldurulur.
     Gecersiz kalibrasyon sessizce yok sayilmaz: world_xy None kalir.
+
+    `maks_kare` canli akis (rtsp://) icindir: akisin sonu yoktur, sinir
+    verilmezse dongu hic bitmez. Dosya kaynaklarinda gerekmez.
     """
     from ultralytics import YOLO
 
@@ -68,6 +72,8 @@ def takip_et(
         model.track(source=str(video), persist=True, conf=conf, tracker=tracker,
                     stream=True, verbose=False)
     ):
+        if maks_kare is not None and f_idx >= maks_kare:
+            break
         boxes = res.boxes
         if boxes is None or boxes.id is None:
             continue

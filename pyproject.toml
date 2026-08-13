@@ -16,7 +16,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3"]
+dev = ["pytest>=8.3", "httpx>=0.27"]
+# Faz 7 servisi. Cekirdek CLI bunlari gerektirmesin diye ayri ekstra.
+# PDF icin ayri kutuphane YOK: matplotlib zaten ultralytics ile geliyor ve
+# DejaVu fontuyla Turkce karakterleri dogru basiyor (bkz. adgs/workorder.py).
+api = ["fastapi>=0.115", "uvicorn>=0.30", "python-multipart>=0.0.9"]
 
 [project.scripts]
 adgs = "adgs.cli:main"
@@ -28,7 +32,11 @@ build-backend = "setuptools.build_meta"
 # Flat-layout otomatik kesfi data/, config/, training/ dizinlerini de paket
 # sanip build'i durduruyor. Tek gercek paket adgs.
 [tool.setuptools]
-packages = ["adgs"]
+packages = ["adgs", "adgs.violations"]
+
+# Tek sayfalik arayuz paket icinde tasinir (adgs/web/index.html).
+[tool.setuptools.package-data]
+adgs = ["web/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

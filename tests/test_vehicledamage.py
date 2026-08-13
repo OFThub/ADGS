@@ -116,12 +116,13 @@ def test_dusuk_cozunurlukte_sinif_URETILMEZ():
     assert h["guvenilir"] is False
     assert h["tipler"] == []
     assert h["siddet"] is None
-    assert "128" in h["sebep"]
+    # Esik sabite baglanir - olcumle degisince test bayatlamasin.
+    assert str(m8.MIN_KENAR_PIKSEL) in h["sebep"]
     assert any("URETILMEDI" in u for u in uyarilar)
 
 
 def test_yeterli_cozunurlukte_sinif_uretilir():
-    iz = _iz(1, {10: (100, 100, 300, 250), 12: (110, 100, 310, 250)})
+    iz = _iz(1, {10: (100, 100, 400, 350), 12: (110, 100, 410, 350)})
     evt = _kaza([1])
     m8.degerlendir(
         VIDEO, [evt], [iz],
@@ -152,7 +153,7 @@ def test_esik_parametreyle_gevsetilebilir():
 
 def test_hasar_bulunamazsa_bos_ama_guvenilir():
     """"Hasar yok" ile "bakamadim" ayni sey degil - ikisi ayri isaretlenir."""
-    iz = _iz(1, {10: (100, 100, 300, 250)})
+    iz = _iz(1, {10: (100, 100, 400, 350)})
     evt = _kaza([1])
     m8.degerlendir(VIDEO, [evt], [iz], dedektor=_sabit_dedektor([]),
                    kare_getir=lambda f: _kare())
@@ -163,7 +164,7 @@ def test_hasar_bulunamazsa_bos_ama_guvenilir():
 
 
 def test_model_yoksa_sessizce_gecilmez():
-    iz = _iz(1, {10: (100, 100, 300, 250)})
+    iz = _iz(1, {10: (100, 100, 400, 350)})
     evt = _kaza([1])
     uyarilar = m8.degerlendir(VIDEO, [evt], [iz], model_path="yok/model.pt")
     assert evt.parties[0].hasar is None
@@ -173,7 +174,7 @@ def test_model_yoksa_sessizce_gecilmez():
 def test_kaza_disi_olaylar_dokunulmaz():
     evt = _kaza([1])
     evt.tip = "IHLAL"
-    iz = _iz(1, {10: (100, 100, 300, 250)})
+    iz = _iz(1, {10: (100, 100, 400, 350)})
     assert m8.degerlendir(VIDEO, [evt], [iz],
                           dedektor=_sabit_dedektor([("dent", (1, 1, 5, 5), 0.9)]),
                           kare_getir=lambda f: _kare()) == []
@@ -181,7 +182,7 @@ def test_kaza_disi_olaylar_dokunulmaz():
 
 
 def test_iz_keyframede_yoksa_sebep_yazilir():
-    iz = _iz(1, {50: (100, 100, 300, 250)})  # keyframe 10 yok
+    iz = _iz(1, {50: (100, 100, 400, 350)})  # keyframe 10 yok
     evt = _kaza([1])
     m8.degerlendir(VIDEO, [evt], [iz], dedektor=_sabit_dedektor([]),
                    kare_getir=lambda f: _kare())
@@ -190,7 +191,7 @@ def test_iz_keyframede_yoksa_sebep_yazilir():
 
 
 def test_kare_okunamazsa_uyari():
-    iz = _iz(1, {10: (100, 100, 300, 250)})
+    iz = _iz(1, {10: (100, 100, 400, 350)})
     evt = _kaza([1])
     uyarilar = m8.degerlendir(VIDEO, [evt], [iz], dedektor=_sabit_dedektor([]),
                               kare_getir=lambda f: None)
@@ -202,13 +203,13 @@ def test_kare_okunamazsa_uyari():
 
 def test_en_agir_tip_bolgeyi_belirler():
     """Cizik ve catlak birlikteyse bolge catlaga gore secilir."""
-    iz = _iz(1, {10: (100, 100, 300, 250), 12: (110, 100, 310, 250)})
+    iz = _iz(1, {10: (100, 100, 400, 350), 12: (110, 100, 410, 350)})
     evt = _kaza([1])
     m8.degerlendir(
         VIDEO, [evt], [iz],
         dedektor=_sabit_dedektor([
-            ("scratch", (0, 0, 20, 20), 0.9),      # arka tarafta
-            ("crack", (180, 60, 199, 90), 0.9),    # on tarafta
+            ("scratch", (0, 0, 20, 20), 0.9),        # arka tarafta
+            ("crack", (270, 100, 299, 140), 0.9),    # on tarafta
         ]),
         kare_getir=lambda f: _kare(),
     )
@@ -228,7 +229,7 @@ def test_kirpma_kare_disina_tasarsa_cokmez():
 
 
 def test_hasar_notu_eksper_sinirini_soyler():
-    iz = _iz(1, {10: (100, 100, 300, 250)})
+    iz = _iz(1, {10: (100, 100, 400, 350)})
     evt = _kaza([1])
     m8.degerlendir(VIDEO, [evt], [iz],
                    dedektor=_sabit_dedektor([("dent", (20, 20, 60, 60), 0.9)]),
@@ -237,7 +238,7 @@ def test_hasar_notu_eksper_sinirini_soyler():
 
 
 def test_alan_orani_biri_gecemez():
-    iz = _iz(1, {10: (100, 100, 300, 250)})
+    iz = _iz(1, {10: (100, 100, 400, 350)})
     evt = _kaza([1])
     m8.degerlendir(
         VIDEO, [evt], [iz],

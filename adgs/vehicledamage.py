@@ -48,9 +48,20 @@ _AGIRLIK = {
 _YAPISAL = {"crack", "glass shatter", "tire flat"}
 
 # Arac kutusunun uzun kenari bu pikselin altindaysa sinif bazli hasar ciktisi
-# GUVENILMEZ. Deger CarDD'nin egitim olceginden degil, cozunurluk calismasindan
-# gelir: bkz. training/cardd_cozunurluk_etkisi.py
-MIN_KENAR_PIKSEL = 128
+# GUVENILMEZ. Deger TAHMIN DEGIL, OLCUMDUR:
+# training/cardd_cozunurluk_etkisi.py -> runs/cardd_olcek/sonuc.json
+#
+#   uzun kenar   mAP@0.5   referansa gore dusus
+#      640 px     0.514      -
+#      384 px     0.465     %9.6
+#      256 px     0.371     %27.8   <- kapi burada
+#      192 px     0.270     %47.5
+#      128 px     0.149     %71.0
+#       96 px     0.104     %79.7
+#
+# Ilk yazimda 128 idi ve bu bir TAHMINDI; olcum onu curuttu. 128 px'de dogrulugun
+# %62'si kayboluyor - o esikte sinif yayinlamak tahmin yurutmeye yakin.
+MIN_KENAR_PIKSEL = 256
 
 # Hasar alaninin arac kutusuna orani.
 _ORTA_ALAN = 0.05

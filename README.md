@@ -67,6 +67,39 @@ Video görüntüleri kişisel veri içerir (yüz, plaka). Belediye bu veriler a�
 
 ---
 
+## 🎬 Demo — 2 komut
+
+Sunum için en kısa yol:
+
+```bash
+pip install -e ".[api,dev]"
+adgs serve                       # http://127.0.0.1:8000/
+```
+
+Tarayıcıda açılan sayfada:
+
+1. **Video yükle** — `data/testset/demo_pan.mp4`, profil `cctv_fixed`,
+   tespit `kaza + ihlal`, kamera `demo_sentetik`, tarih seç → *Yükle ve işle*
+2. Durum `BEKLIYOR → ISLENIYOR → TAMAM` diye kendiliğinden ilerler (~20 sn)
+3. **İşaretlenmiş video** bölümünde sonuç oynar: her araç kalıcı takip
+   numarasıyla çerçeveli, altta kaldırılamayan *ÖN DEĞERLENDİRME* filigranı
+4. **Olaylar** tablosunda tespitler; satıra tıklayınca gerekçe notları açılır,
+   sağdan **klip** ve **PDF iş emri** indirilir
+5. **Kara nokta analizi** bölümünde konum/kamera bazlı risk sıralaması
+
+> `demo_sentetik` kamerasının şerit yönleri **uydurmadır**, gerçek ölçüm
+> değildir. Sunumda çıkan `TERS_YON` tespitleri kod yolunun çalıştığını
+> gösterir; gerçek ihlal değildir. Gerçek kamera için
+> `config/cameras/arnavutkoy_kavsak_01.yaml` sahada ölçülüp doldurulmalıdır —
+> ölçülmediği sürece sistem o kamerada **tespit yapmayı reddeder**.
+
+Sadece takip görüntüsü isteniyorsa (en hızlı görsel, veritabanı gerekmez):
+
+```bash
+adgs track data/testset/demo_pan.mp4 --out runs/demo
+# runs/demo/demo_pan_tracked.mp4
+```
+
 ## Kurulum
 
 ```bash
@@ -241,13 +274,62 @@ Kaza olaylarının her tarafına `hasar` alanı eklenir:
  "siddet": "ORTA", "alan_orani": 0.061, "keyframe": 412}
 ```
 
+**Kabul kriteri ölçüldü:** `mAP@0.5 = 0.509` (hedef ≥ 0.40), 13 epoch,
+`yolo26s`, 561 görüntülük val kümesi.
+
+Sınıf bazında tablo, modülün asıl sınırını gösteriyor:
+
+| sınıf | AP@0.5:0.95 |
+|---|---|
+| tire flat | 0.705 |
+| glass shatter | 0.674 |
+| lamp broken | 0.386 |
+| scratch | 0.167 |
+| dent | 0.147 |
+| **crack** | **0.025** |
+
+Büyük ve yapısal hasar tutuyor; ince dokulu hasar (çatlak, çizik, göçük)
+çalışmıyor. Bu bir başarısızlık değil, **bulgudur** — ve çözünürlük kapısının
+dayanağıdır.
+
 **Çözünürlük kapısı — bu modülün en önemli davranışı.** CarDD yakın çekim
 fotoğraflardan oluşur (araç kareyi doldurur). Sabit CCTV ise aracı 60×40
 piksellik bir kutuda görür. O boyutta "çizik mi göçük mü" sorusunun görüntüde
-cevabı yoktur — ama model yine de bir sınıf üretir. Bu yüzden araç kırpmasının
-uzun kenarı `MIN_KENAR_PIKSEL` (varsayılan 128) altındaysa **sınıf bazlı çıktı
-üretilmez**; `guvenilir: false` ve sebep yazılır. Yakın çekim/olay yeri
-fotoğrafı beslendiğinde eşik gevşetilebilir.
+cevabı yoktur — ama model yine de bir sınıf üretir.
+
+`MIN_KENAR_PIKSEL` **tahmin değil ölçümdür**
+(`python training/cardd_cozunurluk_etkisi.py`):
+
+| uzun kenar | mAP@0.5 | referansa göre düşüş |
+|---|---|---|
+| 640 px | 0.514 | — |
+| 384 px | 0.465 | %9.6 |
+| **256 px** | **0.371** | **%27.8** ← kapı burada |
+| 192 px | 0.270 | %47.5 |
+| 128 px | 0.149 | %71.0 |
+| 96 px | 0.104 | %79.7 |
+
+Tam tablo (64 px dahil): `runs/cardd_olcek/sonuc.json`
+
+Sınıf bazında düşüş, kapının **neden** orada olduğunu açıklıyor (640 → 256 px):
+
+| sınıf | 640 px | 256 px | düşüş |
+|---|---|---|---|
+| tire flat | 0.708 | 0.646 | %9 |
+| glass shatter | 0.670 | 0.566 | %15 |
+| dent | 0.148 | 0.076 | %48 |
+| lamp broken | 0.405 | 0.178 | %56 |
+| scratch | 0.166 | 0.073 | %56 |
+| crack | 0.024 | 0.007 | %72 |
+
+Büyük ve yapısal hasar küçültmeye dayanıyor; ince doku dayanmıyor. **Pratik
+sonuç:** CCTV ölçeğinde yalnızca "lastik patlak" ve "cam kırılması" güvenilir;
+çizik/çatlak/göçük ayrımı için yakın çekim veya olay yeri fotoğrafı gerekir.
+
+İlk yazımda eşik 128 idi ve bu bir tahmindi; ölçüm onu çürüttü. Araç kırpmasının
+uzun kenarı eşiğin altındaysa **sınıf bazlı çıktı üretilmez**: `guvenilir: false`
+ve sebep yazılır. Yakın çekim / olay yeri fotoğrafı beslendiğinde eşik
+gevşetilebilir (`degerlendir(..., min_kenar=...)`).
 
 **Bölge (ön/arka/yan) aracın yönünü gerektirir.** Yön, izin hareket
 vektöründen çıkarılır. Duran araç için yön bilinemez ve `bolge: null` kalır —
@@ -261,12 +343,161 @@ Altyapı hasarının şiddeti burada **yeniden hesaplanmaz**; M5 onu zaten üret
 > `prep_cardd.py` dosya adı hash'inden deterministik bir bölünme üretir. Bu
 > nedenle ölçülen mAP makaleyle **doğrudan karşılaştırılamaz**.
 
+### Faz 7 — depolama, API, arayüz, iş emri
+
+```bash
+pip install -e ".[api]"
+adgs serve                      # http://127.0.0.1:8000/  (API dokümanı: /docs)
+adgs store runs/f5/rapor.json --video kavsak.mp4 --camera arnavutkoy_kavsak_01 \
+           --tarih 2026-07-15
+adgs workorder runs/f5/rapor.json --event altyapi_0007 --out is_emri.pdf
+adgs purge                      # KVKK: saklama süresi dolanları imha et
+```
+
+**M10 — SQLite, dört tablo:** `videos` · `events` · `parties` · `violations`.
+Şema PostgreSQL'e taşınabilir yazıldı; geçiş bağlantı dizesi değişikliğidir.
+Çoklu kamera için `videos.camera_id` ve `events.gps_*` baştan var — ayrı
+`cameras` tablosu, kullanıcı yönetimi ve tenant izolasyonu **bilinçli olarak
+yazılmadı**.
+
+**API uçları:**
+
+| Uç | İş |
+|---|---|
+| `POST /videos` | **yalnızca dosya** — kalanı videodan türetilir |
+| `GET /videos/{id}/status` | `BEKLIYOR → ISLENIYOR → TAMAM\|HATA` |
+| `GET /events?tip=&tarih=&camera_id=` | filtreli olay listesi |
+| `GET /events/{id}` | tek olay (taraflar, kusur, ceza) |
+| `GET /events/{id}/is-emri.pdf` | Fen İşleri PDF iş emri |
+| `POST /kvkk/purge` | saklama süresi dolanları imha |
+| `GET /` | tek sayfa arayüz |
+
+**Yükleme yalnızca videoyu ister.** Kaynak profili, çalışacak dedektörler,
+kamera ve çekim tarihi kullanıcıya sorulmaz; `adgs/probe.py` bunları videonun
+kendisinden türetir:
+
+| Alan | Nereden | Nasıl |
+|---|---|---|
+| `profile` | **ölçüm** | yarım saniyedeki kamera kayması (faz korelasyonu), kare genişliğinin oranı olarak |
+| `detect` | profilden | sabit → `accident,ihlal` · araca monteli → `roaddamage` |
+| `camera` | dosya adı | `config/cameras/` altındaki **tanımlı** kimlikle birebir eşleşme |
+| `tarih` | dosya adı | `2026-07-15` · `20260715` · `15.07.2026` |
+
+Kamera kayması ölçüldü (bu depodaki videolar, medyan): sabit sahne **%0.004**,
+kaydırılan kamera **%19.3** — iki sınıf arasında ~50× fark var, eşiğin tam yeri
+kritik değil. Bitişik karelerdeki *piksel yoğunluğu farkı* bu iş için
+yetersizdi: 30 fps'te sahne birkaç piksel kayar ve düz yüzeylerde (asfalt,
+gökyüzü) fark eşiğin altında kalır — dashcam görüntüsü "sabit" ölçülüyordu.
+
+**Türetilemeyen alan boş bırakılır, tahmin edilmez.** İkisi özellikle önemli:
+
+- **Tarih** bugüne düşmez. Arşiv videosu bugünün ceza tablosuyla hesaplanırsa
+  sessizce yanlış tutar üretir.
+- **Kamera** çözünürlükten tahmin edilmez. Yanlış kamera = yanlış dur çizgisi =
+  bir vatandaş adına yanlış ihlal kaydı. Bu projede precision recall'dan önce
+  gelir.
+
+Boş kalan alan ilgili modülün kendi reddetme mekanizmasını çalıştırır. Her
+kararın gerekçesi yanıtın `turetilen.gerekce` alanında döner ve arayüzde
+yüklemenin hemen altında gösterilir — türetilmiş bir değer kullanıcıdan
+saklanmaz.
+
+İşleme **senkron değildir**: analiz dakikalar sürdüğü için HTTP isteği
+bekletilmez, istemci durumu sorgular. Boru hattı burada yeniden yazılmaz —
+`cli.run` çağrılır, ürettiği `rapor.json` veritabanına alınır.
+
+**PDF iş emri.** Yeni bağımlılık eklenmedi: reportlab/fpdf2'nin gömülü fontları
+Latin-1'dir ve `ş/ğ/İ` basamaz — resmî bir iş emrinde bozuk metin kabul
+edilemez. matplotlib zaten Ultralytics ile kurulu geliyor ve DejaVu fontunu
+paket içinde taşıyor. Şiddet/öncelik M5'in notlarından **okunur, yeniden
+hesaplanmaz**.
+
+**KVKK — üç mekanizma, üçü de test edilmiş:**
+
+- **Saklama süresi:** `config/pipeline.yaml` → `saklama_gun` (varsayılan 30).
+  `adgs purge` süresi dolan kayıtları **ve klip dosyalarını** siler. Sadece
+  satırı silmek diskte kişisel veri bırakırdı.
+- **Bulanıklaştırma:** `plaka_bulaniklastir` / `yuz_bulaniklastir` varsayılan
+  **açık**. İşaretli video ve kliplerde yaya kutusunun üstü (baş) ve araç
+  kutusunun alt-ortası (plaka) Gaussian blur ile kapatılır.
+  > Bölgeler **geometrik yaklaşımdır** — ayrı plaka/yüz dedektörü yok. Fazladan
+  > alan bulanıklaştırmak, eksik bulanıklaştırmaktan iyidir; gerçek dedektör
+  > eklenirse yalnızca `render.kvkk_bolgeleri()` değişir.
+- **Cascade:** SQLite'ta `foreign_keys` PRAGMA'sı varsayılan **kapalıdır**;
+  açılmazsa imha sırasında taraf/ihlal satırları öksüz kalırdı. Açık olduğu
+  testle doğrulanıyor.
+
+### Faz 8 — ileri özellikler
+
+```bash
+adgs hotspot --db data/adgs.db --yaricap 50      # kara nokta analizi
+adgs track rtsp://kamera/stream --sure 60        # canlı akış, 60 sn
+```
+
+**Kara nokta analizi (M8'in planlama çıktısı).** Belediyenin bu sistemden
+çıkarabileceği en değerli yatırım girdisi: hangi noktada, ne sıklıkta, ne
+ağırlıkta olay oluyor. Ağırlık `KAZA 5 > IHLAL 2 > ALTYAPI 1`, yol hasarında
+şiddet çarpanıyla.
+
+**İki gruplama birbirine karıştırılmaz** — bu kasıtlıdır:
+
+| Kaynak | Gruplama |
+|---|---|
+| GPS var (araca monteli) | haversine ile coğrafi kümeleme, yarıçap ayarlanabilir |
+| GPS yok (sabit CCTV) | kamera bazlı gruplama |
+
+Sabit kameranın olaylarına uydurma koordinat verip haritaya basmak, var
+olmayan bir kara nokta üretirdi. Ağırlıklar **göreli sıralama ölçeğidir**,
+mutlak risk skoru değil — gerçek kara nokta analizi yaralanma ve maddi hasar
+verisi gerektirir, bu sistemde o veri yok.
+
+**Canlı akış (RTSP).** `adgs track` `rtsp://` / `rtmp://` kaynaklarını okur.
+`--sure` **zorunludur**: akışın sonu yoktur, sınır verilmezse döngü hiç bitmez.
+Canlı akışta işaretli video üretilmez (akış geri sarılamaz), izler yazılır.
+`adgs run` dosya gerektirir — klip kesme ve işaretleme kaynağı yeniden okur.
+
+**Çoklu kamera.** `GET /kameralar` kamera başına video/olay özeti verir;
+`videos.camera_id` ve `events.gps_*` şemada baştan vardı.
+
+**Bilinçli olarak yapılMAyanlar:**
+
+| Madde | Neden |
+|---|---|
+| PostgreSQL + PostGIS geçişi | SQLite şeması zaten taşınabilir yazıldı; geçiş bağlantı dizesi değişikliği. Gerçek ikinci kamera gelmeden migration altyapısı kurmak erken. |
+| Araç içi davranış (kemer/telefon/kask) | Plan §5'te fizibilitesi düşük işaretlenmişti ve Faz 4 bunu doğruladı: sabit CCTV 6-10 m yükseklikten bakar, ön cam yansıması nedeniyle sürücü gövdesi çoğu karede görünmez. Araca monteli iç kamera olmadan anlamlı değil. |
+
+## Kabul kriterleri — ölçüm
+
+Plandaki her kabul kriteri tek komutla ölçülür:
+
+```bash
+adgs kabul                # tablo
+adgs kabul --json         # rapora gömmek için
+```
+
+Her satır üç durumdan birini alır. **"Kod yazıldı" bir durum değildir.**
+
+| Durum | Anlamı |
+|---|---|
+| `GECTI` | ölçüldü ve hedefi tutturdu |
+| `KALDI` | **ölçüldü** ve hedefin altında kaldı |
+| `OLCULMEDI` | ölçüm koşulu yok (eğitilmiş model veya etiketli veri gerekiyor) |
+
+`OLCULMEDI` bir başarısızlık değildir ama başarı olarak da gösterilemez; her
+satır nedenini ve o nedeni kaldırmak için gerekeni yazar. Model mAP'leri
+`adgs eval`'in yazdığı `runs/<ad>/kabul.json`'dan okunur — tablo dakikalarca
+süren val koşusunu tekrarlamaz.
+
+Çıkış kodu yalnızca `KALDI` varsa sıfırdan farklıdır: ölçülememiş bir kriter
+hata değildir, ölçülüp hedefin altında kalan kriter hatadır.
+
 ## Test
 
 ```bash
 pytest -q
 pytest tests/test_fault.py tests/test_penalty.py -v   # Faz 5 kabul kriteri
 grep -nE '[0-9]{4,}' adgs/penalty.py                  # BOŞ dönmeli
+adgs kabul                                            # tüm kabul kriterleri
 ```
 
 ## Lisans notu

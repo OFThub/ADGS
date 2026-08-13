@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADGS — Trafik Video Analiz Sistemi</title>
+<!-- Tek dosya, harici CDN/font yok: belediye ağında dış bağımlılık istemiyoruz. -->
+<style>
+  :root {
+    --kenar:#d8dde3; --gri:#5b6570; --kirmizi:#8a0000; --arka:#f6f7f9;
+    /* Uc basamakli olcek. Vurgu boyutla degil agirlik ve renkle yapilir. */
+    --f-mikro:11px; --f-govde:13px; --f-ana:20px;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:var(--f-govde)/1.55 system-ui, "Segoe UI", Roboto, sans-serif;
+         color:#1c2126; background:var(--arka); }
+  header { background:#1c2126; color:#fff; padding:16px 20px; }
+  header h1 { margin:0; font-size:var(--f-ana); letter-spacing:-.01em; }
+  header p { margin:4px 0 0; font-size:var(--f-mikro); color:#b8c0c8; }
+  main { max-width:1100px; margin:0 auto; padding:20px; }
+  .kutu { background:#fff; border:1px solid var(--kenar); border-radius:8px;
+          padding:16px; margin-bottom:16px; }
+  .kutu h2 { margin:0 0 14px; font-size:var(--f-mikro); text-transform:uppercase;
+             letter-spacing:.08em; color:var(--gri); }
+  .altbaslik { margin:14px 0 6px; font-size:var(--f-mikro); text-transform:uppercase;
+               letter-spacing:.06em; color:var(--gri); }
+  label { display:inline-block; font-size:var(--f-mikro); color:var(--gri);
+          margin-right:4px; }
+  input, select, button { font:inherit; padding:6px 9px; border:1px solid var(--kenar);
+                          border-radius:6px; background:#fff; }
+  button { cursor:pointer; background:#1c2126; color:#fff; border-color:#1c2126; }
+  button.ikincil { background:#fff; color:#1c2126; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--kenar);
+           vertical-align:top; }
+  th { font-size:var(--f-mikro); text-transform:uppercase; letter-spacing:.06em;
+       color:var(--gri); }
+  tr.acilir { cursor:pointer; }
+  tr.acilir:hover { background:#f0f3f6; }
+  .rozet { display:inline-block; padding:1px 7px; border-radius:10px;
+           font-size:var(--f-mikro); border:1px solid var(--kenar); }
+  .KAZA { background:#fdecec; border-color:#f3b8b8; }
+  .IHLAL { background:#fff4e5; border-color:#f2ce9a; }
+  .ALTYAPI { background:#e8f4ec; border-color:#a8d5bb; }
+  .ASLI { background:#fdecec; border-color:#f3b8b8; }
+  .detay { background:#fbfcfd; }
+  .detay pre { white-space:pre-wrap; margin:6px 0 0; color:#333; }
+  /* Zorunlu hukuki uyari. Govde boyutunda kalir; ayrimi agirlik ve renk yapar. */
+  .uyari { color:var(--kirmizi); font-weight:600;
+           border-top:1px solid var(--kenar); margin-top:14px; padding-top:10px; }
+  .bos { color:var(--gri); padding:14px 6px; }
+  .durum { font-size:var(--f-mikro); color:var(--gri); margin-left:8px; }
+  video { width:100%; max-height:460px; background:#000; border-radius:6px;
+          display:block; }
+  .sayaclar { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .sayac { flex:1 1 120px; border:1px solid var(--kenar); border-radius:6px;
+           padding:10px 12px; background:#fbfcfd; }
+  .sayac b { display:block; font-size:var(--f-ana); line-height:1.2; }
+  .sayac span { font-size:var(--f-mikro); color:var(--gri);
+                text-transform:uppercase; letter-spacing:.06em; }
+  .satir { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .ipucu { font-size:var(--f-mikro); color:var(--gri); margin:8px 0 0; }
+  /* Videodan turetilen parametreler ve gerekceleri. */
+  .turetilen { margin-top:12px; border:1px solid var(--kenar); border-radius:6px;
+               background:#fbfcfd; padding:10px 12px; }
+  .tsatir { display:flex; gap:8px; align-items:baseline; }
+  .tad { font-size:var(--f-mikro); color:var(--gri); text-transform:uppercase;
+         letter-spacing:.06em; min-width:96px; }
+  .gerekce { margin:8px 0 0; padding-left:16px; font-size:var(--f-mikro);
+             color:var(--gri); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ADGS — Trafik Video Analiz Sistemi</h1>
+  <p>Arnavutköy Belediyesi · <strong>Karar destek aracıdır, bağlayıcı bir tespit üretmez.</strong></p>
+</header>
+
+<main>
+  <section class="kutu">
+    <h2>1 · Video yükle ve analiz et</h2>
+    <form id="yukle" class="satir">
+      <input type="file" name="file" accept="video/*" required>
+      <button type="submit">Yükle ve işle</button>
+      <span class="durum" id="yuklemeDurum"></span>
+    </form>
+    <div id="turetilen" class="turetilen" hidden></div>
+    <p class="ipucu"><strong>Tek girdi videodur.</strong> Kaynak profili, hangi
+      dedektörlerin çalışacağı, kamera ve çekim tarihi videonun kendisinden
+      türetilir — kamera kayması ölçülür, kamera kimliği ve tarih dosya adından
+      okunur. Türetilemeyen alan boş bırakılır ve ilgili modül kendini kapatır;
+      tahmin edilmez. Her kararın gerekçesi yüklemeden sonra aşağıda görünür.</p>
+    <p class="ipucu">Analiz arka planda çalışır, durum kendiliğinden güncellenir.
+      İşaretli videoda her araç kalıcı takip numarasıyla çerçevelenir; olay
+      bulunursa şiddet renginde vurgulanır. Plaka ve yüz bölgeleri KVKK gereği
+      bulanıklaştırılır.</p>
+  </section>
+
+  <section class="kutu">
+    <h2>2 · İşaretlenmiş video</h2>
+    <div class="satir" style="margin-bottom:10px">
+      <label>video</label>
+      <select id="videoSec"></select>
+      <button class="ikincil" onclick="videolariYukle()">Yenile</button>
+      <span class="durum" id="videoDurum"></span>
+    </div>
+    <video id="oynatici" controls playsinline></video>
+  </section>
+
+  <section class="kutu">
+    <h2>3 · Olaylar</h2>
+    <div class="sayaclar" id="sayaclar"></div>
+    <div class="satir" style="margin-bottom:10px">
+      <label>tip</label>
+      <select id="fTip">
+        <option value="">hepsi</option><option>KAZA</option>
+        <option>IHLAL</option><option>ALTYAPI</option>
+      </select>
+      <label>tarih</label><input type="date" id="fTarih">
+      <label>kamera</label><input type="text" id="fKamera" size="14">
+      <button class="ikincil" onclick="olaylariYukle()">Filtrele</button>
+      <button class="ikincil" onclick="imha()">KVKK imha</button>
+      <span class="durum" id="olayDurum"></span>
+    </div>
+    <table id="tablo">
+      <thead><tr>
+        <th>olay</th><th>tip</th><th>alt tip</th><th>kusur / ceza</th>
+        <th>tarih</th><th>güven</th><th>kanıt</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="uyari" id="uyari"></div>
+  </section>
+
+  <section class="kutu">
+    <h2>4 · Kara nokta analizi</h2>
+    <div class="satir" style="margin-bottom:10px">
+      <label>yarıçap (m)</label>
+      <input type="number" id="yaricap" value="50" min="5" max="2000" step="5" size="6">
+      <button class="ikincil" onclick="karaNokta()">Hesapla</button>
+      <span class="durum" id="knDurum"></span>
+    </div>
+    <div id="knCikti"></div>
+    <div class="uyari" id="knUyari"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+
+// GUVENLIK: sunucudan gelen hicbir deger innerHTML ile birlestirilMEZ.
+// tarih ve kamera alanlari yukleme formundan geliyor, veritabanina yaziliyor ve
+// her izleyicinin sayfasinda gorunuyor - sablon dizesiyle basmak stored XSS'tir.
+const el = (tag, text, cls) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+
+// class adlari da sunucudan gelir; beklenen kumeye kisitlanir.
+const TIPLER = ["KAZA", "IHLAL", "ALTYAPI"];
+const SINIFLAR = ["ASLI", "TALI", "TESPIT_EDILEMEDI"];
+const rozet = (deger, beyaz) =>
+  el("span", deger, "rozet " + (beyaz.includes(deger) ? deger : ""));
+
+function kusurHucresi(o) {
+  const td = el("td");
+  for (const t of o.parties || [])
+    for (const v of t.violations || []) {
+      const satir = el("div");
+      satir.append(el("span", v.ihlal_kodu));
+      if (v.ktk_madde) satir.append(el("span", ` · KTK ${v.ktk_madde}`));
+      if (v.kusur_sinifi) {
+        satir.append(document.createTextNode(" "));
+        satir.append(rozet(v.kusur_sinifi, SINIFLAR));
+      }
+      if (v.ceza_tutari_try != null)
+        satir.append(el("span", ` · ${v.ceza_tutari_try} TL`));
+      td.append(satir);
+    }
+  if (!td.childNodes.length) td.textContent = "—";
+  return td;
+}
+
+function kanitHucresi(o) {
+  const td = el("td");
+  if (o.klip) {
+    const k = el("a", "klip ▶");
+    k.href = `/events/${encodeURIComponent(o.event_id)}/klip`;
+    k.target = "_blank"; k.rel = "noopener";
+    td.append(k, document.createTextNode(" · "));
+  }
+  const p = el("a", "iş emri ↗");
+  p.href = `/events/${encodeURIComponent(o.event_id)}/is-emri.pdf`;
+  p.target = "_blank"; p.rel = "noopener";
+  td.append(p);
+  return td;
+}
+
+function sayaclariCiz(olaylar) {
+  const kap = $("#sayaclar");
+  kap.textContent = "";
+  const say = { KAZA: 0, IHLAL: 0, ALTYAPI: 0 };
+  for (const o of olaylar) if (o.tip in say) say[o.tip]++;
+  for (const [ad, n] of [["Toplam", olaylar.length], ["Kaza", say.KAZA],
+                         ["İhlal", say.IHLAL], ["Altyapı", say.ALTYAPI]]) {
+    const k = el("div", null, "sayac");
+    k.append(el("b", String(n)), el("span", ad));
+    kap.append(k);
+  }
+}
+
+async function olaylariYukle() {
+  const q = new URLSearchParams();
+  if ($("#fTip").value) q.set("tip", $("#fTip").value);
+  if ($("#fTarih").value) q.set("tarih", $("#fTarih").value);
+  if ($("#fKamera").value) q.set("camera_id", $("#fKamera").value);
+  $("#olayDurum").textContent = "yükleniyor…";
+  const d = await (await fetch("/events?" + q)).json();
+  const tb = $("#tablo tbody");
+  tb.innerHTML = "";
+  sayaclariCiz(d.events);
+  for (const o of d.events) {
+    const tr = el("tr", null, "acilir");
+    const idHucre = el("td");
+    idHucre.append(el("code", o.event_id));
+    const tipHucre = el("td");
+    tipHucre.append(rozet(o.tip, TIPLER));
+    tr.append(idHucre, tipHucre, el("td", o.alt_tip ?? "—"), kusurHucresi(o),
+              el("td", o.cekim_tarihi ?? "—"), el("td", o.conf ?? "—"),
+              kanitHucresi(o));
+
+    const detay = el("tr", null, "detay");
+    detay.style.display = "none";
+    const dHucre = el("td");
+    dHucre.colSpan = 7;
+    dHucre.append(el("pre", (o.notlar || []).map(n => "• " + n).join("\n")));
+    detay.append(dHucre);
+
+    tr.onclick = (e) => {
+      if (e.target.tagName === "A") return;
+      detay.style.display = detay.style.display === "none" ? "" : "none";
+    };
+    tb.append(tr, detay);
+  }
+  if (!d.events.length) {
+    const bos = el("td", "Kayıt yok.", "bos");
+    bos.colSpan = 7;
+    const satir = el("tr");
+    satir.append(bos);
+    tb.append(satir);
+  }
+  $("#olayDurum").textContent = `${d.sayi} olay`;
+  $("#uyari").textContent = d.uyari;
+}
+
+// --- Video ------------------------------------------------------------------
+
+async function videolariYukle(secilecek) {
+  const d = await (await fetch("/videos")).json();
+  const sec = $("#videoSec");
+  sec.textContent = "";
+  for (const v of d.videolar) {
+    const ad = String(v.dosya).split(/[\\/]/).pop();
+    const o = el("option", `#${v.id} · ${ad} · ${v.durum}`);
+    o.value = String(v.id);
+    sec.append(o);
+  }
+  if (!d.videolar.length) {
+    sec.append(el("option", "(video yok)"));
+    $("#videoDurum").textContent = "";
+    return;
+  }
+  if (secilecek != null) sec.value = String(secilecek);
+  videoyuGoster();
+}
+
+function videoyuGoster() {
+  const id = $("#videoSec").value;
+  if (!id || isNaN(Number(id))) return;
+  $("#oynatici").src = `/videos/${encodeURIComponent(id)}/annotated`;
+  $("#videoDurum").textContent = "işaretli video";
+}
+$("#videoSec").onchange = videoyuGoster;
+// Sunucu 404'un sebebini yaziyor (analiz suruyor / uretilemedi) - genel bir
+// "hazir degil" yerine o sebep gosteriliyor.
+$("#oynatici").onerror = async () => {
+  const id = $("#videoSec").value;
+  $("#videoDurum").textContent = "işaretli video henüz hazır değil";
+  if (!id || isNaN(Number(id))) return;
+  try {
+    const r = await fetch(`/videos/${encodeURIComponent(id)}/annotated`);
+    if (r.ok) return;
+    const d = await r.json();
+    if (d && d.detail) $("#videoDurum").textContent = d.detail;
+  } catch (_) { /* sebep alinamadi, genel mesaj kalsin */ }
+};
+
+// --- Yükleme ----------------------------------------------------------------
+
+$("#yukle").onsubmit = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  $("#yuklemeDurum").textContent = "yükleniyor…";
+  const r = await fetch("/videos", { method: "POST", body: fd });
+  const d = await r.json();
+  if (!r.ok) {
+    $("#yuklemeDurum").textContent = "hata: " + (d.detail || r.status);
+    return;
+  }
+  turetilenGoster(d.turetilen);
+  izle(d.video_id);
+};
+
+// Turetilmis parametreler kullanicidan saklanmaz: hangi degerin nereden
+// geldigi gerekcesiyle birlikte gosterilir. Sunucu verisi dugum olarak
+// olusturulur (textContent) - sablon dizesiyle innerHTML'e basmak stored XSS.
+function turetilenGoster(t) {
+  const kap = $("#turetilen");
+  kap.textContent = "";
+  if (!t) { kap.hidden = true; return; }
+  const bos = "türetilemedi";
+  for (const [ad, deger] of [["profil", t.profile], ["dedektörler", t.detect],
+                             ["kamera", t.camera || bos], ["çekim tarihi", t.tarih || bos]]) {
+    const s = el("div", null, "tsatir");
+    s.append(el("span", ad, "tad"), el("b", String(deger)));
+    kap.append(s);
+  }
+  const ul = el("ul", null, "gerekce");
+  for (const g of t.gerekce || []) ul.append(el("li", g));
+  kap.append(ul);
+  kap.hidden = false;
+}
+
+async function izle(id) {
+  // Analiz dakikalar sürebilir; durum sorgulanarak takip edilir.
+  const d = await (await fetch(`/videos/${id}/status`)).json();
+  $("#yuklemeDurum").textContent = `#${id} · ${d.durum}` + (d.hata ? ` — ${d.hata}` : "");
+  if (d.durum === "TAMAM" || d.durum === "HATA") {
+    olaylariYukle();
+    videolariYukle(id);
+    karaNokta();
+    return;
+  }
+  setTimeout(() => izle(id), 3000);
+}
+
+async function imha() {
+  if (!confirm("Saklama süresi dolan kayıtlar ve klip dosyaları KALICI olarak silinecek. Devam edilsin mi?")) return;
+  const d = await (await fetch("/kvkk/purge", { method: "POST" })).json();
+  alert(`İmha: ${d.silinen_video} video kaydı, ${d.silinen_klip} klip dosyası silindi.`);
+  olaylariYukle();
+  videolariYukle();
+}
+
+// --- Kara nokta -------------------------------------------------------------
+
+function knTablo(baslik, satirlar, anahtar) {
+  const kap = el("div");
+  kap.append(el("h3", baslik, "altbaslik"));
+  if (!satirlar.length) { kap.append(el("div", "Kayıt yok.", "bos")); return kap; }
+  const t = el("table");
+  const thead = el("thead"), htr = el("tr");
+  for (const h of [anahtar, "olay", "ağırlık", "tipler"]) htr.append(el("th", h));
+  thead.append(htr);
+  const tb = el("tbody");
+  for (const s of satirlar) {
+    const tr = el("tr");
+    const ad = s.camera_id != null ? s.camera_id : `${s.lat}, ${s.lon}`;
+    const tipler = Object.entries(s.tipler || {})
+      .map(([k, v]) => `${k}×${v}`).join("  ");
+    tr.append(el("td", ad), el("td", String(s.olay_sayisi)),
+              el("td", String(s.agirlik)), el("td", tipler));
+    tb.append(tr);
+  }
+  t.append(thead, tb);
+  kap.append(t);
+  return kap;
+}
+
+async function karaNokta() {
+  $("#knDurum").textContent = "hesaplanıyor…";
+  const y = Number($("#yaricap").value) || 50;
+  const d = await (await fetch(`/kara-nokta?yaricap_m=${y}`)).json();
+  const kap = $("#knCikti");
+  kap.textContent = "";
+  kap.append(knTablo(`Coğrafi kümeler — ${d.gps_li_olay} GPS'li olay, ${y} m yarıçap`,
+                     d.cografi_kumeler, "konum"));
+  kap.append(knTablo("Kamera bazlı gruplar — GPS'siz olaylar",
+                     d.kamera_gruplari, "kamera"));
+  $("#knDurum").textContent = `${d.toplam_olay} olay incelendi`;
+  $("#knUyari").textContent = d.uyari;
+}
+
+olaylariYukle();
+videolariYukle();
+karaNokta();
+</script>
+</body>
+</html>

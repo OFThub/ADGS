@@ -90,13 +90,18 @@ def _video_fps(video: Path) -> float:
         cap.release()
 
 
-def _klip_ekle(events: list, src: Path, outdir: Path) -> None:
-    """Her olaya klip kaniti ekler. Kanitsiz olay rapora zaten yazilmaz."""
+def _klip_ekle(events: list, src: Path, outdir: Path, izler: list | None = None,
+               kvkk: dict | None = None) -> None:
+    """Her olaya klip kaniti ekler. Kanitsiz olay rapora zaten yazilmaz.
+
+    Klip ham goruntu tasidigi icin KVKK bulaniklastirmasi burada uygulanir.
+    """
     from adgs import render
 
     for e in events:
         klip = render.save_clip(src, e.frame_start, e.frame_end,
-                                outdir / "klipler" / f"{e.event_id}.mp4")
+                                outdir / "klipler" / f"{e.event_id}.mp4",
+                                izler=izler, kvkk=kvkk)
         if klip:
             e.evidence["clip"] = str(klip)
 
@@ -144,6 +149,8 @@ def run(video: str, model: str, out: str, profile: str, conf: float,
     outdir = Path(out)
     events: list = []
     uyarilar: list[str] = []
+    kvkk = _kvkk_ayari()
+    izler: list = []  # KVKK bulaniklastirmasi icin video yazicilarina verilir
 
     if "roaddamage" in tipler:
         from adgs import roaddamage
@@ -178,7 +185,7 @@ def run(video: str, model: str, out: str, profile: str, conf: float,
         if "accident" in tipler:
             kazalar = accident.tespit_et(izler, fps, str(src),
                                          source_profile=profile, kalib=k)
-            _klip_ekle(kazalar, src, outdir)
+            _klip_ekle(kazalar, src, outdir, izler, kvkk)
             # M8 - arac hasari (Faz 6). Arac kirpmasi cok kucukse sinif bazli
             # cikti URETILMEZ; sebep uyarilara yazilir.
             from adgs import vehicledamage as m8
@@ -195,7 +202,7 @@ def run(video: str, model: str, out: str, profile: str, conf: float,
             )
             secili = None if "ihlal" in tipler else sorted(tipler & ihlal_adlari)
             ihlaller = m4.tespit_et(izler, ctx, secili)
-            _klip_ekle(ihlaller, src, outdir)
+            _klip_ekle(ihlaller, src, outdir, izler, kvkk)
             events += ihlaller
             uyarilar += ctx.uyarilar
 
@@ -211,7 +218,10 @@ def run(video: str, model: str, out: str, profile: str, conf: float,
         uyarilar.append(f"kusur motoru calismadi: {e}")
     penalty.uygula(events, olay_tarihi=tarih)
 
-    mp4 = render.annotate_video(src, events, outdir / f"{src.stem}_annotated.mp4")
+    # Takip yapildiysa kutulari da ciz: olay bulunmayan bir videoda cikti aksi
+    # halde ham videodan farksiz gorunur ve sistemin yaptigi is gorunmez olur.
+    mp4 = render.annotate_video(src, events, outdir / f"{src.stem}_annotated.mp4",
+                                izler=izler, kvkk=kvkk, izleri_ciz=bool(izler))
     js = render.write_report(events, outdir / "rapor.json", source=str(src),
                              uyarilar=uyarilar)
 
@@ -262,14 +272,29 @@ def calibrate(camera: str, verify: bool) -> int:
     return 0 if (k.gecerli or not verify) else 1
 
 
+_AKIS_ONEKLERI = ("rtsp://", "rtmp://", "http://", "https://")
+
+
+def _akis_mi(kaynak: str) -> bool:
+    return kaynak.lower().startswith(_AKIS_ONEKLERI)
+
+
 def track(video: str, model: str, out: str, camera: str | None, conf: float,
-          tracker: str, min_kare: int) -> int:
-    """Faz 2 boru hatti: video -> tespit+takip -> ID'li MP4 + izler.json."""
+          tracker: str, min_kare: int, sure: float | None = None) -> int:
+    """Faz 2 boru hatti: video -> tespit+takip -> ID'li MP4 + izler.json.
+
+    Faz 8: kaynak rtsp:// ise canli akistan okur. Akisin sonu olmadigi icin
+    --sure ZORUNLUDUR; suresiz bir akis donguyu hic bitirmez.
+    """
     from adgs import calib, detect, render
 
+    akis = _akis_mi(video)
     src = Path(video)
-    if not src.exists():
+    if not akis and not src.exists():
         print(f"[FAIL] video bulunamadi: {src}")
+        return 1
+    if akis and not sure:
+        print("[FAIL] canli akis icin --sure (saniye) zorunlu - akisin sonu yok")
         return 1
 
     k = None
@@ -280,21 +305,31 @@ def track(video: str, model: str, out: str, camera: str | None, conf: float,
         if not k.gecerli:
             print("  UYARI: kalibrasyon gecersiz - dunya koordinati ve hiz URETILMEYECEK")
 
-    print(f"Takip calisiyor: {src.name} (tracker={tracker})")
-    izler = detect.takip_et(src, model_path=model, kalib=k, conf=conf, tracker=tracker)
+    kaynak = video if akis else src
+    ad = video if akis else src.name
+    maks_kare = int(sure * (25.0 if akis else _video_fps(src))) if sure else None
+    print(f"Takip calisiyor: {ad} (tracker={tracker}"
+          + (f", canli akis, {sure:.0f} sn" if akis else "") + ")")
+    izler = detect.takip_et(kaynak, model_path=model, kalib=k, conf=conf,
+                            tracker=tracker, maks_kare=maks_kare)
     toplam = len(izler)
     izler = detect.kisa_izleri_ele(izler, min_kare=min_kare)
 
     outdir = Path(out)
-    mp4 = render.annotate_tracks(src, izler, outdir / f"{src.stem}_tracked.mp4", kalib=k)
-    js = render.write_tracks(izler, outdir / "izler.json", source=str(src), kalib=k)
+    # Canli akis geri sarilamaz - isaretli video yalnizca dosya kaynaklarinda
+    # uretilir. Izler her iki durumda da yazilir.
+    mp4 = None
+    if not akis:
+        mp4 = render.annotate_tracks(src, izler, outdir / f"{src.stem}_tracked.mp4",
+                                     kalib=k, kvkk=_kvkk_ayari())
+    js = render.write_tracks(izler, outdir / "izler.json", source=str(kaynak), kalib=k)
 
     print()
     print(f"{len(izler)} iz ({toplam - len(izler)} kisa iz elendi, <{min_kare} kare)")
     for cls, n in detect.ozet(izler).items():
         print(f"  {cls}: {n}")
     print()
-    print(f"Video : {mp4}")
+    print(f"Video : {mp4 if mp4 else '- (canli akis geri sarilamaz)'}")
     print(f"Izler : {js}")
     return 0
 
@@ -321,12 +356,222 @@ def evaluate(model: str, data: str, imgsz: int, batch: int, hedef: float) -> int
     print(f"Veri  : {data}")
     print(f"mAP@0.5      : {map50:.4f}   (hedef >= {hedef})")
     print(f"mAP@0.5:0.95 : {float(r.box.map):.4f}")
+    # DIKKAT: r.box.maps sinif basina AP@0.5:0.95'tir, AP@0.5 DEGIL. Basliksiz
+    # listelemek okuyani yaniltiyordu.
     adlar = getattr(m, "names", {}) or {}
+    print("\nSinif basina AP@0.5:0.95:")
     for i, ap in enumerate(list(r.box.maps)):
         print(f"  {adlar.get(i, i)}: {float(ap):.4f}")
     ok = map50 >= hedef
     print("\nSonuc:", "KRITER SAGLANDI" if ok else "KRITER SAGLANMADI")
+    # Sonuc diske yazilir: `adgs kabul` bunu okur. Aksi halde kabul tablosu her
+    # calistiginda dakikalarca suren val kosusunu tekrarlardi.
+    _olcum_yaz(model, {
+        "model": model, "veri": data, "map50": map50,
+        "map50_95": float(r.box.map), "hedef": hedef, "gecti": ok,
+        "sinif_ap50_95": {str(adlar.get(i, i)): float(ap)
+                          for i, ap in enumerate(list(r.box.maps))},
+        "zaman": _simdi(),
+    })
     return 0 if ok else 1
+
+
+def kabul(json_bas: bool = False) -> int:
+    """Plandaki tum kabul kriterlerini olcer.
+
+    Cikis kodu OLCULMEDI'ye bakmaz, yalnizca KALDI'ya: olculememis bir kriter
+    hata degildir (veri veya egitilmis model bekliyor), ama olculup hedefin
+    altinda kalan bir kriter hatadir.
+    """
+    from adgs import acceptance
+
+    s = acceptance.olc()
+    if json_bas:
+        import json as _json
+        from dataclasses import asdict
+
+        print(_json.dumps([asdict(k) for k in s.kriterler],
+                          ensure_ascii=False, indent=2))
+    else:
+        print(acceptance.bicimle(s))
+    return 1 if s.sayim()[acceptance.KALDI] else 0
+
+
+def _simdi() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _olcum_yaz(model: str, veri: dict) -> None:
+    """Olcumu modelin agirlik dizininin yanina yazar (runs/<ad>/kabul.json)."""
+    import json
+
+    try:
+        p = Path(model).resolve().parent.parent / "kabul.json"
+        p.write_text(json.dumps(veri, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Olcum kaydedildi: {p}")
+    except OSError as e:  # olcum basarili, yazamamak onu gecersiz kilmaz
+        print(f"[UYARI] olcum kaydedilemedi: {e}")
+
+
+def _kvkk_ayari() -> dict:
+    """config/pipeline.yaml'dan plaka/yuz bulaniklastirma bayraklarini okur.
+
+    Varsayilan ACIK: video kisisel veri icerir ve bayrak okunamadiginda
+    guvenli taraf bulaniklastirmaktir.
+    """
+    import yaml
+
+    try:
+        cfg = yaml.safe_load((CONFIG_DIR / "pipeline.yaml").read_text(encoding="utf-8")) or {}
+    except OSError:
+        cfg = {}
+    return {"plaka": bool(cfg.get("plaka_bulaniklastir", True)),
+            "yuz": bool(cfg.get("yuz_bulaniklastir", True))}
+
+
+def serve(host: str, port: int, reload: bool) -> int:
+    """Faz 7 servisi (FastAPI + tek sayfalik arayuz)."""
+    try:
+        import uvicorn
+    except ImportError:
+        print("[FAIL] FastAPI servisi kurulu degil. Kurulum: pip install -e \".[api]\"")
+        return 1
+    _windows_baglanti_gurultusunu_sustur()
+    print(f"Arayuz: http://{host}:{port}/    API dokumani: /docs")
+    uvicorn.run("adgs.api:app", host=host, port=port, reload=reload)
+    return 0
+
+
+def _windows_baglanti_gurultusunu_sustur() -> None:
+    """Videoda ileri sarinca konsolu dolduran sahte hata yiginini susturur.
+
+    Tarayici video oynaticisinda ileri sarildiginda acik range istegini
+    (206 Partial Content) iptal eder. Windows'un proactor tasiyicisi kapanmis
+    sokete shutdown() cagirir ve ConnectionResetError (WinError 10054) asyncio
+    olay dongusunun hata isleyicisine dusup tam yigin izi basar.
+
+    Istemcinin baglantiyi kapatmasi normaldir; sunucu tarafinda yapilacak bir
+    sey yok. Yalnizca BU cagridaki ConnectionResetError yutulur - baska hata
+    tipi ve baska cagri yolu aynen yukselmeye devam eder.
+    """
+    from asyncio.proactor_events import _ProactorBasePipeTransport as T
+
+    asil = T._call_connection_lost
+    if getattr(asil, "_adgs_sarmalandi", False):
+        return
+
+    def sarmal(self, exc):
+        try:
+            asil(self, exc)
+        except ConnectionResetError:
+            pass
+
+    sarmal._adgs_sarmalandi = True
+    T._call_connection_lost = sarmal
+
+
+def store_cmd(rapor: str, video: str, db: str, camera: str | None,
+              tarih: str | None, profil: str) -> int:
+    """Uretilmis bir rapor.json'u veritabanina alir (M10)."""
+    from adgs import store as m10
+
+    p = Path(rapor)
+    if not p.exists():
+        print(f"[FAIL] rapor bulunamadi: {p}")
+        return 1
+    conn = m10.baglan(db)
+    try:
+        vid = m10.video_kaydet(conn, video, camera_id=camera, kaynak_profil=profil,
+                               cekim_tarihi=tarih, durum="TAMAM")
+        n = m10.rapordan_kaydet(conn, vid, p)
+    finally:
+        conn.close()
+    print(f"video #{vid} kaydedildi, {n} olay yazildi -> {db}")
+    return 0
+
+
+def purge(db: str, gun: int | None) -> int:
+    """KVKK: saklama suresi dolan kayitlari ve klipleri imha eder."""
+    from adgs import store as m10
+
+    if gun is None:
+        import yaml
+
+        cfg = yaml.safe_load((CONFIG_DIR / "pipeline.yaml").read_text(encoding="utf-8")) or {}
+        gun = int(cfg.get("saklama_gun", 30))
+    conn = m10.baglan(db)
+    try:
+        sonuc = m10.saklama_uygula(conn, gun=gun)
+    except ValueError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    finally:
+        conn.close()
+    print(f"Saklama suresi: {gun} gun (sinir {sonuc['sinir']})")
+    print(f"Silinen video kaydi : {sonuc['silinen_video']}")
+    print(f"Silinen klip dosyasi: {sonuc['silinen_klip']}")
+    for s in sonuc["silinemeyen"]:
+        print(f"  ! silinemedi: {s}")
+    return 0
+
+
+def workorder_cmd(rapor: str, event_id: str, out: str, video: str | None) -> int:
+    """Fen Isleri icin PDF is emri uretir."""
+    import json
+
+    from adgs.workorder import is_emri_pdf
+
+    p = Path(rapor)
+    if not p.exists():
+        print(f"[FAIL] rapor bulunamadi: {p}")
+        return 1
+    veri = json.loads(p.read_text(encoding="utf-8"))
+    olay = next((e for e in veri.get("events") or []
+                 if e.get("event_id") == event_id), None)
+    if olay is None:
+        print(f"[FAIL] olay bulunamadi: {event_id}")
+        return 1
+    olay.setdefault("video", olay.get("source_video"))
+    olay.setdefault("notlar", olay.get("notes") or [])
+    yol = is_emri_pdf(olay, out, video=video)
+    print(f"Is emri: {yol}")
+    return 0
+
+
+def hotspot_cmd(db: str, yaricap: float, tip: str | None) -> int:
+    """Faz 8 - kara nokta analizi (planlama ciktisi)."""
+    from adgs import hotspot
+    from adgs import store as m10
+
+    conn = m10.baglan(db)
+    try:
+        olaylar = m10.olaylari_getir(conn, tip=tip, limit=1000)
+    finally:
+        conn.close()
+    d = hotspot.analiz(olaylar, yaricap_m=yaricap)
+    print(f"{d['toplam_olay']} olay ({d['gps_li_olay']} GPS'li), "
+          f"yaricap {yaricap:.0f} m\n")
+
+    print("COGRAFI KUMELER")
+    if not d["cografi_kumeler"]:
+        print("  (GPS'li olay yok)")
+    for i, k in enumerate(d["cografi_kumeler"], 1):
+        tipler = ", ".join(f"{a}x{n}" for a, n in k["tipler"].items())
+        print(f"  {i}. {k['lat']}, {k['lon']}  olay={k['olay_sayisi']} "
+              f"agirlik={k['agirlik']}  [{tipler}]")
+
+    print("\nKAMERA BAZLI GRUPLAR (GPS'siz)")
+    if not d["kamera_gruplari"]:
+        print("  (GPS'siz olay yok)")
+    for i, g in enumerate(d["kamera_gruplari"], 1):
+        tipler = ", ".join(f"{a}x{n}" for a, n in g["tipler"].items())
+        print(f"  {i}. {g['camera_id']}  olay={g['olay_sayisi']} "
+              f"agirlik={g['agirlik']}  [{tipler}]")
+
+    print(f"\n{d['uyari']}")
+    return 0
 
 
 def explain(rapor: str, event_id: str | None) -> int:
@@ -438,6 +683,8 @@ def main(argv: list[str] | None = None) -> int:
                    choices=["botsort.yaml", "bytetrack.yaml"])
     t.add_argument("--min-kare", default=3, type=int,
                    help="Bu kareden kisa izler elenir (yanlis pozitif filtresi)")
+    t.add_argument("--sure", default=None, type=float, metavar="SANIYE",
+                   help="Canli akis (rtsp://) icin ZORUNLU sure siniri (Faz 8)")
 
     e = sub.add_parser("eval", help="Kabul kriteri olcumu (mAP@0.5)")
     e.add_argument("--model", default="runs/rdd2022/yolo26s/weights/best.pt")
@@ -447,13 +694,48 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--hedef", default=0.45, type=float,
                    help="Faz 1 yol hasari kabul esigi")
 
+    kb = sub.add_parser("kabul", help="TUM kabul kriterlerini olcer ve tablolar")
+    kb.add_argument("--json", action="store_true",
+                    help="Tabloyu JSON olarak bas (rapora gomulecekse)")
+
     x = sub.add_parser("explain", help="Bir olayin kusur/ceza gerekcesi (Faz 5)")
     x.add_argument("rapor", help="runs/<kosu>/rapor.json")
     x.add_argument("--event", default=None, help="Tek olay; verilmezse hepsi")
 
+    s = sub.add_parser("serve", help="Web arayuzu + API (Faz 7)")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", default=8000, type=int)
+    s.add_argument("--reload", action="store_true")
+
+    st = sub.add_parser("store", help="rapor.json'u veritabanina al (Faz 7)")
+    st.add_argument("rapor")
+    st.add_argument("--video", required=True, help="Kaynak video yolu")
+    st.add_argument("--db", default=str(Path("data/adgs.db")))
+    st.add_argument("--camera", default=None)
+    st.add_argument("--tarih", default=None, metavar="YYYY-AA-GG")
+    st.add_argument("--profile", default="cctv_fixed")
+
+    pg = sub.add_parser("purge", help="KVKK: saklama suresi dolan kayitlari imha et")
+    pg.add_argument("--db", default=str(Path("data/adgs.db")))
+    pg.add_argument("--gun", default=None, type=int,
+                    help="Verilmezse config/pipeline.yaml -> saklama_gun")
+
+    hs = sub.add_parser("hotspot", help="Kara nokta analizi (Faz 8)")
+    hs.add_argument("--db", default=str(Path("data/adgs.db")))
+    hs.add_argument("--yaricap", default=50.0, type=float, metavar="METRE")
+    hs.add_argument("--tip", default=None, choices=["KAZA", "IHLAL", "ALTYAPI"])
+
+    wo = sub.add_parser("workorder", help="Fen Isleri PDF is emri (Faz 7)")
+    wo.add_argument("rapor")
+    wo.add_argument("--event", required=True)
+    wo.add_argument("--out", default="runs/is_emri.pdf")
+    wo.add_argument("--video", default=None, help="Kanit karesi icin kaynak video")
+
     args = parser.parse_args(argv)
     if args.cmd == "eval":
         return evaluate(args.model, args.data, args.imgsz, args.batch, args.hedef)
+    if args.cmd == "kabul":
+        return kabul(args.json)
     if args.cmd == "doctor":
         return doctor()
     if args.cmd == "run":
@@ -462,11 +744,22 @@ def main(argv: list[str] | None = None) -> int:
                    args.tarih, args.damage_model)
     if args.cmd == "explain":
         return explain(args.rapor, args.event)
+    if args.cmd == "serve":
+        return serve(args.host, args.port, args.reload)
+    if args.cmd == "store":
+        return store_cmd(args.rapor, args.video, args.db, args.camera,
+                         args.tarih, args.profile)
+    if args.cmd == "purge":
+        return purge(args.db, args.gun)
+    if args.cmd == "workorder":
+        return workorder_cmd(args.rapor, args.event, args.out, args.video)
+    if args.cmd == "hotspot":
+        return hotspot_cmd(args.db, args.yaricap, args.tip)
     if args.cmd == "calibrate":
         return calibrate(args.camera, args.verify)
     if args.cmd == "track":
         return track(args.video, args.model, args.out, args.camera, args.conf,
-                     args.tracker, args.min_kare)
+                     args.tracker, args.min_kare, args.sure)
     parser.print_help()
     return 0
 
