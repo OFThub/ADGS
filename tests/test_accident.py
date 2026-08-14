@@ -167,3 +167,96 @@ def test_gecersiz_kalibrasyon_filtreyi_devre_disi_birakir():
 def test_esikler_ayarlanabilir():
     a, b = _carpisan_cift()
     assert accident.tespit_et([a, b], FPS, "t.mp4", p=KazaParam(iou_esik=0.99)) == []
+
+
+# --- Uzun videoda BIRDEN FAZLA kaza -----------------------------------------
+#
+# Eski hal yalnizca ILK cakisma karesini sinardi. Uzun bir kayitta bu iki
+# hataya yol aciyordu: (1) once masumca yan yana gecip sonra carpisan cift hic
+# yakalanmiyordu, (2) bir cift en fazla TEK olay uretebiliyordu.
+
+
+def _iki_kez_carpisan_cift(ara: int = 200):
+    """Ayni iki arac kare 20'de ve kare 20+ara'da carpisir."""
+    a, b = {}, {}
+    for taban in (20, 20 + ara):
+        for f in range(taban - 20, taban):          # A yaklasiyor
+            a[f] = _kutu(100 - (taban - f) * 8, 100)
+        for f in range(taban, taban + 40):          # A durdu
+            a[f] = _kutu(100, 100)
+        for f in range(taban - 20, taban + 40):     # B sabit
+            b[f] = _kutu(120, 100)
+    return _iz(1, a), _iz(2, b)
+
+
+def test_ayni_cift_iki_ayri_kaza_uretebiliyor():
+    a, b = _iki_kez_carpisan_cift()
+    olaylar = accident.tespit_et([a, b], FPS, "x.mp4")
+    assert len(olaylar) == 2, f"beklenen 2 olay, bulunan {len(olaylar)}"
+
+
+def test_ardisik_cakisma_kareleri_tek_olay():
+    """Tek carpismanin onlarca karesi onlarca olay uretmemeli."""
+    a, b = _carpisan_cift()
+    assert len(accident.tespit_et([a, b], FPS, "x.mp4")) == 1
+
+
+def test_olaylar_zamana_gore_sirali_ve_numarali():
+    a, b = _iki_kez_carpisan_cift()
+    olaylar = accident.tespit_et([a, b], FPS, "x.mp4")
+    assert [e.event_id for e in olaylar] == ["kaza_0001", "kaza_0002"]
+    assert olaylar[0].frame_start < olaylar[1].frame_start
+
+
+def test_olay_suresi_izin_omruyle_degil_carpismayla_sinirli():
+    """Goruntude 5 dakika kalan arac 5 dakikalik "kaza" uretmemeli."""
+    a, b = _carpisan_cift(dur_kare=3000)     # izler cok uzun yasiyor
+    (olay,) = accident.tespit_et([a, b], FPS, "x.mp4")
+    p = KazaParam()
+    beklenen_ust = 20 + p.pencere_kare + int(p.hareketsizlik_sn * FPS)
+    assert olay.frame_end <= beklenen_ust
+    assert olay.t_end - olay.t_start < 10.0
+
+
+def test_olay_zamani_saniye_olarak_dolu():
+    """Kullanici "hangi saniye" bilgisini istiyor - t_start dogru olmali."""
+    a, b = _carpisan_cift()
+    (olay,) = accident.tespit_et([a, b], FPS, "x.mp4")
+    assert olay.t_start == olay.frame_start / FPS
+    assert olay.t_start > 0
+
+
+# --- Sahne kesmesi (montaj video) -------------------------------------------
+#
+# Derleme videoda kesme, kaza imzasini TAKLIT eder: izler kopar, farkli
+# sahnelerin kutulari cakisir, konum sicramasi "ani hareket degisimi" uretir.
+# Olculdu: 5 dakikalik bir derlemede sinyal-2'yi gecen 14 adayin bir kismi
+# kesme kaynakliydi.
+
+
+def test_kesmeye_yakin_cakisma_kaza_sayilmiyor():
+    a, b = _carpisan_cift()
+    assert len(accident.tespit_et([a, b], FPS, "x.mp4")) == 1
+    # Carpisma karesi 20; kesme tam orada
+    olaylar = accident.tespit_et([a, b], FPS, "x.mp4", kesmeler={20})
+    assert olaylar == []
+
+
+def test_uzak_kesme_kazayi_engellemiyor():
+    """Tampon disindaki kesme gecerli kazayi elememeli."""
+    a, b = _carpisan_cift()
+    olaylar = accident.tespit_et([a, b], FPS, "x.mp4", kesmeler={500})
+    assert len(olaylar) == 1
+
+
+def test_kesme_verilmezse_davranis_degismiyor():
+    a, b = _carpisan_cift()
+    assert len(accident.tespit_et([a, b], FPS, "x.mp4", kesmeler=None)) == 1
+    assert len(accident.tespit_et([a, b], FPS, "x.mp4", kesmeler=set())) == 1
+
+
+def test_tani_kesme_elemesini_sayiyor():
+    a, b = _carpisan_cift()
+    d = accident.tani([a, b], FPS, kesmeler={20})
+    assert d["kesme_elendi"] == 1
+    assert d["kabul"] == 0

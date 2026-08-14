@@ -45,6 +45,13 @@ class KazaParam:
     maks_yer_mesafesi_m: float = 6.0
     # Cok kisa izler degerlendirmeye girmez
     min_iz_kare: int = 5
+    # Sahne kesmesinin bu kadar yakinindaki cakisma DEGERLENDIRILMEZ. Kesmede
+    # izler kopar, farkli sahnelerin kutulari cakisir ve konum sicramasi
+    # "ani hareket degisimi"ni taklit eder - hepsi sahte kaza uretir.
+    kesme_tampon_kare: int = 15
+    # Bu kadar kare arayla suren cakismalar TEK epizot sayilir. Ayni carpismanin
+    # ardisik kareleri tek olay olsun, ayri zamanlardaki iki olay ayri kalsin.
+    epizot_bosluk_kare: int = 30
 
 
 def iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
@@ -162,12 +169,100 @@ def _okluzyon_mu(a: Track, b: Track, f: int, kalib, p: KazaParam) -> bool:
     return mesafe is not None and mesafe > p.maks_yer_mesafesi_m
 
 
-def _carpisma_karesi(a: Track, b: Track, p: KazaParam) -> int | None:
-    """Iki izin IoU'sunun esigi ilk astigi ortak kare."""
-    for f in sorted(set(a.frames) & set(b.frames)):
-        if iou(a.frames[f].bbox, b.frames[f].bbox) >= p.iou_esik:
-            return f
-    return None
+def _carpisma_kareleri(a: Track, b: Track, p: KazaParam) -> list[int]:
+    """Iki izin cakisma EPIZOTLARININ baslangic kareleri.
+
+    Onceki hali yalnizca ILK cakisma karesini donuyordu; uzun videolarda bu
+    iki ayri hata uretiyordu:
+
+      1. Ayni iki arac once yan yana gecip DAHA SONRA carpissa yalnizca ilk
+         (masum) gecis sinaniyor, gercek kaza HIC gorulmuyordu.
+      2. Bir cift en fazla TEK olay uretebiliyordu; 5 dakikalik bir kayitta
+         ayni araclarin iki ayri olayi tek olaya iniyordu.
+
+    Ardisik cakisma kareleri tek epizot sayilir; arada `epizot_bosluk_kare`den
+    uzun bosluk varsa yeni epizot baslar - boylece tek carpismanin onlarca
+    karesi onlarca olay uretmez.
+    """
+    ortak = sorted(set(a.frames) & set(b.frames))
+    cakisan = [f for f in ortak
+               if iou(a.frames[f].bbox, b.frames[f].bbox) >= p.iou_esik]
+    epizotlar: list[list[int]] = []
+    for f in cakisan:
+        if epizotlar and f - epizotlar[-1][1] <= p.epizot_bosluk_kare:
+            epizotlar[-1][1] = f
+        else:
+            epizotlar.append([f, f])
+    return [e[0] for e in epizotlar]
+
+
+def _kesmeye_yakin(f: int, kesmeler: set[int] | None, p: KazaParam) -> bool:
+    """Kare bir sahne kesmesinin tampon araliginda mi."""
+    if not kesmeler:
+        return False
+    return any(abs(f - k) <= p.kesme_tampon_kare for k in kesmeler)
+
+
+def tani(izler: list[Track], fps: float, p: KazaParam | None = None,
+         kesmeler: set[int] | None = None) -> dict:
+    """Aday ciftlerin HANGI SINYALDE elendigini sayar.
+
+    "1 kaza bulundu" ciktisinin sebebini tahmin etmek yerine olcmek icin.
+    Esik gevsetmek yanlis pozitif uretir; hangi sinyalin ne kadar eledigi
+    bilinmeden dokunulmamali.
+    """
+    p = p or KazaParam()
+    uygun = [t for t in izler if len(t.frames) >= p.min_iz_kare]
+    d = {"iz": len(izler), "uygun_iz": len(uygun), "cift": 0, "cakisan_cift": 0,
+         "epizot": 0, "kesme_elendi": 0, "okluzyon_elendi": 0,
+         "hareket_sinyali_yok": 0, "hareketsizlik_yok": 0, "veri_yetersiz": 0,
+         "kabul": 0}
+    for i, a in enumerate(uygun):
+        for b in uygun[i + 1:]:
+            d["cift"] += 1
+            epizotlar = _carpisma_kareleri(a, b, p)
+            if epizotlar:
+                d["cakisan_cift"] += 1
+            d["epizot"] += len(epizotlar)
+            for f in epizotlar:
+                if _kesmeye_yakin(f, kesmeler, p):
+                    d["kesme_elendi"] += 1
+                    continue
+                if _okluzyon_mu(a, b, f, None, p):
+                    d["okluzyon_elendi"] += 1
+                    continue
+                if not (ani_degisim_var_mi(a, f, p) or ani_degisim_var_mi(b, f, p)):
+                    d["hareket_sinyali_yok"] += 1
+                    continue
+                if kaza_imzasi(a, f, fps, p) or kaza_imzasi(b, f, fps, p):
+                    d["kabul"] += 1
+                    continue
+                # Hareket sinyali var ama hareketsizlik yok. Veri mi bitti,
+                # yoksa arac gercekten hareketine devam mi etti?
+                gerekli = max(2, int(p.hareketsizlik_sn * fps))
+                yeter = any(len([k for k in iz.frames if k >= f + p.pencere_kare])
+                            >= gerekli for iz in (a, b))
+                d["hareketsizlik_yok" if yeter else "veri_yetersiz"] += 1
+    return d
+
+
+def tani_metni(izler: list[Track], fps: float, p: KazaParam | None = None,
+               kesmeler: set[int] | None = None) -> str:
+    p = p or KazaParam()
+    d = tani(izler, fps, p, kesmeler)
+    return "\n".join([
+        f"iz: {d['iz']}  (>= {p.min_iz_kare} kare olan: {d['uygun_iz']})",
+        f"cift: {d['cift']}  cakisan cift: {d['cakisan_cift']}  "
+        f"cakisma epizodu: {d['epizot']}",
+        "",
+        f"  sahne kesmesi (montaj)         : {d['kesme_elendi']}",
+        f"  okluzyon (yer duzleminde uzak) : {d['okluzyon_elendi']}",
+        f"  ani hareket degisimi YOK       : {d['hareket_sinyali_yok']}",
+        f"  hareketsizlik YOK (devam etti) : {d['hareketsizlik_yok']}",
+        f"  hareketsizlik OLCULEMEDI       : {d['veri_yetersiz']}"
+        "   <- iz kesildi / kare yetmedi",
+        f"  KABUL EDILEN                   : {d['kabul']}",
+    ])
 
 
 def tespit_et(
@@ -177,10 +272,14 @@ def tespit_et(
     source_profile: str = "cctv_fixed",
     kalib=None,
     p: KazaParam | None = None,
+    kesmeler: set[int] | None = None,
 ) -> list[Event]:
     """Track listesinden kaza olaylari uretir (Asama A).
 
     Uc sinyalin ucu birden saglanmadikca Event URETILMEZ.
+
+    `kesmeler` (probe.sahne_kesmeleri) verilirse kesmeye yakin cakismalar
+    degerlendirilmez - derleme videoda kesme, kaza imzasini taklit eder.
     """
     p = p or KazaParam()
     uygun = [t for t in izler if len(t.frames) >= p.min_iz_kare]
@@ -189,43 +288,55 @@ def tespit_et(
 
     for i, a in enumerate(uygun):
         for b in uygun[i + 1:]:
-            f = _carpisma_karesi(a, b, p)
-            if f is None:
-                continue  # sinyal 1 yok
-            if _okluzyon_mu(a, b, f, kalib, p):
-                continue  # yer duzleminde uzaklar - okluzyon
-            # Sinyal 2+3 ayni tarafta olmali (bkz. kaza_imzasi)
-            if not (kaza_imzasi(a, f, fps, p) or kaza_imzasi(b, f, fps, p)):
-                continue
+            for f in _carpisma_kareleri(a, b, p):
+                if _kesmeye_yakin(f, kesmeler, p):
+                    continue  # sahne kesmesi - kaza degil, montaj
+                if _okluzyon_mu(a, b, f, kalib, p):
+                    continue  # yer duzleminde uzaklar - okluzyon
+                # Sinyal 2+3 ayni tarafta olmali (bkz. kaza_imzasi)
+                if not (kaza_imzasi(a, f, fps, p) or kaza_imzasi(b, f, fps, p)):
+                    continue
 
-            sayac += 1
-            son = max(max(a.frames), max(b.frames))
-            kareler: dict[int, list[int]] = {}
-            for iz in (a, b):
-                for kf, det in iz.frames.items():
-                    if f - p.pencere_kare <= kf <= son:
-                        kareler.setdefault(kf, list(det.bbox))
-            olaylar.append(
-                Event(
-                    event_id=f"kaza_{sayac:04d}",
-                    tip="KAZA",
-                    alt_tip="CARPISMA",
-                    t_start=max(0, f - p.pencere_kare) / fps,
-                    t_end=son / fps,
-                    frame_start=max(0, f - p.pencere_kare),
-                    frame_end=son,
-                    source_video=source_video,
-                    source_profile=source_profile,
-                    conf=round(iou(a.frames[f].bbox, b.frames[f].bbox), 3),
-                    evidence={"keyframes": [f], "kareler": kareler},
-                    parties=[Party(track_id=a.track_id), Party(track_id=b.track_id)],
-                    notes=[
-                        f"Kural tabanli tespit: iz #{a.track_id} ({a.cls}) ve "
-                        f"#{b.track_id} ({b.cls}) kare {f}'de cakisti, ardindan "
-                        f"ani hareket degisimi ve hareketsizlik gozlendi.",
-                        "Bu tespit gorsel analize dayalidir; carpisma olup olmadigi "
-                        "ve taraflarin kusuru yetkili merciler tarafindan belirlenir.",
-                    ],
+                sayac += 1
+                # Olay carpismanin ETRAFIYLA sinirli. Onceki hali izlerin en son
+                # karesini aliyordu: 5 dakika boyunca goruntude kalan bir arac
+                # 5 dakikalik "kaza" uretiyor, klip ve kutu anlamsizlasiyordu.
+                bit = f + p.pencere_kare + int(p.hareketsizlik_sn * fps)
+                son = min(max(max(a.frames), max(b.frames)), bit)
+                kareler: dict[int, list[int]] = {}
+                for iz in (a, b):
+                    for kf, det in iz.frames.items():
+                        if f - p.pencere_kare <= kf <= son:
+                            kareler.setdefault(kf, list(det.bbox))
+                olaylar.append(
+                    Event(
+                        event_id=f"kaza_{sayac:04d}",
+                        tip="KAZA",
+                        alt_tip="CARPISMA",
+                        t_start=max(0, f - p.pencere_kare) / fps,
+                        t_end=son / fps,
+                        frame_start=max(0, f - p.pencere_kare),
+                        frame_end=son,
+                        source_video=source_video,
+                        source_profile=source_profile,
+                        conf=round(iou(a.frames[f].bbox, b.frames[f].bbox), 3),
+                        evidence={"keyframes": [f], "kareler": kareler},
+                        parties=[Party(track_id=a.track_id),
+                                 Party(track_id=b.track_id)],
+                        notes=[
+                            f"Kural tabanli tespit: iz #{a.track_id} ({a.cls}) ve "
+                            f"#{b.track_id} ({b.cls}) kare {f}'de ({f / fps:.1f} sn) "
+                            "cakisti, ardindan ani hareket degisimi ve "
+                            "hareketsizlik gozlendi.",
+                            "Bu tespit gorsel analize dayalidir; carpisma olup "
+                            "olmadigi ve taraflarin kusuru yetkili merciler "
+                            "tarafindan belirlenir.",
+                        ],
+                    )
                 )
-            )
+    # Zamana gore sirala: olaylar cift dongusunden cift sirasiyla cikiyordu,
+    # 5 dakikalik bir kayitta liste zaman disi gorunuyordu.
+    olaylar.sort(key=lambda e: e.frame_start)
+    for n, e in enumerate(olaylar, 1):
+        e.event_id = f"kaza_{n:04d}"
     return olaylar

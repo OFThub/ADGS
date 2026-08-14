@@ -52,6 +52,16 @@ def nan_muhafizi(trainer) -> None:
         bozuk += [f"{k}: {s}" for k, v in items.items() if (s := _kotu(v))]
     elif isinstance(items, torch.Tensor) and (sebep := _kotu(items)):
         bozuk.append(f"loss_items: {sebep}")
+    # tloss (kosu ortalamasi) DA kontrol edilir - muhafizin kor noktasiydi.
+    #
+    # loss/loss_items yalnizca ICINDE BULUNULAN batch'i gosterir. Tek bir batch
+    # patlayip sonraki batch normale donerse muhafiz sayaci sifirliyor ve egitim
+    # bozulmus agirliklarla saatlerce devam ediyordu. Gercekte gorulen: box_loss
+    # 1.99 (normal) iken cls kosu ortalamasi 4.77e+07'ye cikti ve muhafiz hic
+    # tetiklenmedi. Ekranda gorunen deger budur; biriken hasari o tasir.
+    tloss = getattr(trainer, "tloss", None)
+    if isinstance(tloss, torch.Tensor) and (sebep := _kotu(tloss)):
+        bozuk.append(f"tloss (kosu ortalamasi): {sebep}")
 
     olumcul = any("NaN/Inf" in b for b in bozuk)
     if not bozuk:

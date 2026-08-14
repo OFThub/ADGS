@@ -110,8 +110,23 @@ adgs doctor
 
 `adgs doctor` GPU/CUDA, detektör, yapılandırma ve şema kontrollerini çalıştırır.
 
-> **Python 3.12 gerekir.** PyTorch'un 3.14 için wheel'i yoktur. Ortam
-> `uv venv --python 3.12 .venv` ile kurulmalıdır.
+> ### ⚠️ Python 3.12 zorunlu — komutları `.venv` ile çalıştırın
+>
+> PyTorch'un CUDA wheel'leri `cp38`–`cp313` içindir; **`cp314` yoktur.** Sistem
+> Python'u 3.14 ise `import torch` çalışır ama CPU sürümü gelir ve
+> `pip install --upgrade torch` "zaten karşılanmış" deyip hiçbir şey yapmaz.
+>
+> **Belirti:** her şey çalışır, sadece 10-20× yavaşlar. 5 dakikalık video 25
+> dakikada işlenir, doğrulama koşusu 19 dakika sürer, eğitim ilerlemez.
+>
+> ```bash
+> .venv/Scripts/python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+> # beklenen : 2.11.0+cu128 True
+> # yanlissa : 2.13.0+cpu   False   -> sistem Python'u kullaniyorsunuz
+> ```
+>
+> Tüm komutları `.venv\Scripts\python.exe -m adgs.cli ...` ile veya ortamı
+> aktive ederek çalıştırın — `adgs serve` dahil.
 
 ## Kullanım
 
@@ -465,6 +480,47 @@ Canlı akışta işaretli video üretilmez (akış geri sarılamaz), izler yazı
 |---|---|
 | PostgreSQL + PostGIS geçişi | SQLite şeması zaten taşınabilir yazıldı; geçiş bağlantı dizesi değişikliği. Gerçek ikinci kamera gelmeden migration altyapısı kurmak erken. |
 | Araç içi davranış (kemer/telefon/kask) | Plan §5'te fizibilitesi düşük işaretlenmişti ve Faz 4 bunu doğruladı: sabit CCTV 6-10 m yükseklikten bakar, ön cam yansıması nedeniyle sürücü gövdesi çoğu karede görünmez. Araca monteli iç kamera olmadan anlamlı değil. |
+
+### Tanı ve yeniden üretim — pahalı adımı tekrarlamadan
+
+Analizin pahalı kısmı takip (YOLO). Çizim ve tespit ayarını denemek için onu
+tekrarlamak gerekmez:
+
+```bash
+# Kayıtlı izlerden tespiti yeniden çalıştır (30 dk yerine ~2 sn)
+adgs redetect runs/api/8/izler.json --video kayit.mp4 --tani
+
+# rapor.json'dan işaretli videoyu yeniden çiz (tespit tekrar çalışmaz)
+adgs rerender runs/api/8/rapor.json --video kayit.mp4
+```
+
+`--tani` her aday çiftin **neden elendiğini** sayar. Gerçek bir koşudan:
+
+```
+552 iz · 122.265 çift · 74 çakışma epizodu
+  sahne kesmesi (montaj)         : 3
+  okluzyon (yer düzleminde uzak) : 0
+  ani hareket değişimi YOK       : 58   ← baskın eleme
+  hareketsizlik YOK (devam etti) : 3
+  hareketsizlik ÖLÇÜLEMEDİ       : 9
+  KABUL EDİLEN                   : 1
+```
+
+Bu tablo olmadan eşik ayarı tahmine dönüşür. İki kez yanlış hipotez kurup bu
+sayılarla düzelttim.
+
+### Videodan türetilen ayarlar
+
+Yükleme yalnızca dosyayı ister; kalanı ölçülür (bkz. Faz 7):
+
+| Alan | Ölçüm | Eşik |
+|---|---|---|
+| profil | faz korelasyonuyla kamera kayması | <%1 sabit · >%3 araca monteli |
+| güven | HSV parlaklık medyanı | <100/255 gece → conf 0.15 |
+| sahne kesmesi | HSV histogram korelasyonu | <0.35 → kesme |
+
+Gece ölçümü: aynı sahnede `conf 0.35` → **0** araç, `conf 0.15` → 9 araç.
+Kesme tespiti montaj videolarda sahte kaza imzasını eler.
 
 ## Kabul kriterleri — ölçüm
 

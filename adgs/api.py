@@ -92,7 +92,7 @@ def _guvenli_ad(ad: str | None) -> str:
 
 
 def _isle(video_id: int, dosya: Path, profil: str, detect: str,
-          camera: str | None, tarih: str | None) -> None:
+          camera: str | None, tarih: str | None, conf: float = 0.35) -> None:
     """Arka plan isi: analizi calistirir ve sonucu veritabanina yazar."""
     from adgs.cli import run as cli_run
 
@@ -111,7 +111,7 @@ def _isle(video_id: int, dosya: Path, profil: str, detect: str,
         outdir = CIKTI_DIZINI / str(video_id)
         kod = cli_run(
             str(dosya), model=yol_modeli,
-            out=str(outdir), profile=profil, conf=0.35,
+            out=str(outdir), profile=profil, conf=conf,
             detect_tipleri=detect, camera=camera, tarih_metni=tarih,
         )
         rapor = outdir / "rapor.json"
@@ -161,7 +161,7 @@ async def video_yukle(arkaplan: BackgroundTasks, file: UploadFile = File(...)):
     finally:
         conn.close()
     arkaplan.add_task(_isle, vid, hedef, t["profile"], t["detect"],
-                      t["camera"], t["tarih"])
+                      t["camera"], t["tarih"], t["conf"])
     return {"video_id": vid, "durum": "BEKLIYOR", "turetilen": t,
             "uyari": "Analiz arka planda calisiyor; /videos/{id}/status ile takip edin."}
 
@@ -200,7 +200,9 @@ def olaylar(tip: str | None = None, tarih: str | None = None,
         conn.close()
     return {
         "sayi": len(kayitlar),
-        "uyari": "Bu cikti bir karar destek analizidir; baglayici bir tespit degildir.",
+        # Kullaniciya GOSTERILEN metin - tam Turkce. ASCII kurali kod
+        # tanimlayicilari ve yorumlar icin; ekrana basilan uyari icin degil.
+        "uyari": "Bu çıktı bir karar destek analizidir; bağlayıcı bir tespit değildir.",
         "events": kayitlar,
     }
 

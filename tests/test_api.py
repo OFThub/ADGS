@@ -80,7 +80,7 @@ def test_olay_listesi(istemci):
 
 
 def test_listede_zorunlu_uyari_var(istemci):
-    assert "baglayici bir tespit degildir" in istemci.get("/events").json()["uyari"]
+    assert "bağlayıcı bir tespit değildir" in istemci.get("/events").json()["uyari"]
 
 
 def test_tipe_gore_filtre(istemci):
@@ -138,9 +138,10 @@ def test_yukleme_sadece_dosya_ister(istemci, monkeypatch):
     r = istemci.post("/videos", files={"file": ("a.mp4", b"0", "video/mp4")})
     assert r.status_code == 200
     t = r.json()["turetilen"]
-    assert set(t) >= {"profile", "detect", "camera", "tarih", "gerekce"}
+    assert set(t) >= {"profile", "detect", "camera", "tarih", "conf", "gerekce"}
     # Her turetilen degerin bir gerekcesi olmali - sessiz varsayilan yok.
-    assert len(t["gerekce"]) == 3
+    # profil, tarih, kamera, guven esigi
+    assert len(t["gerekce"]) == 4
 
 
 def test_turetilen_degerler_veritabanina_yaziliyor(istemci, monkeypatch, tmp_path: Path):

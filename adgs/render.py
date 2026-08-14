@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -13,6 +14,9 @@ from adgs.schema import Event
 _RENK = {"YUKSEK": (0, 0, 220), "ORTA": (0, 165, 255), "DUSUK": (0, 200, 200)}
 _VARSAYILAN_RENK = (0, 200, 0)
 _FILIGRAN = "ON DEGERLENDIRME - BAGLAYICI DEGILDIR"
+# Bir olayin ekranda kalacagi ASGARI sure. Kanit karesi cogu olayda birkac
+# karedir; 30 fps'te 2 kare = 0.07 sn ve izlerken hic fark edilmez.
+_ASGARI_SN = 2.0
 
 # --- KVKK bulaniklastirma ---------------------------------------------------
 # Video kisisel veri icerir (yuz, plaka). Sunum ve arsiv icin varsayilan ACIK.
@@ -87,9 +91,22 @@ def _siddet_of(evt: Event) -> str:
     return ""
 
 
+def sn_mmss(sn: float) -> str:
+    """Saniyeyi dd:ss bicimine cevirir (1 saatten uzun video beklenmiyor)."""
+    sn = max(0, int(sn))
+    return f"{sn // 60:02d}:{sn % 60:02d}"
+
+
 def _etiket(evt: Event) -> str:
+    # TIP basta: izleyenin ilk gormesi gereken sey "kaza mi, yol hasari mi".
+    # Onceki bicim (event_id + alt_tip) tipi hic yazmiyordu; videoda
+    # "kaza_1 CARPISMA" goren biri bunun KAZA oldugunu etiketten cikaramiyordu.
+    #
+    # ZAMAN da etikette: 5 dakikalik bir kayitta "hangi saniyede" sorusu
+    # kutunun kendisi kadar onemli - not alip geri sarmayi mumkun kilar.
     s = _siddet_of(evt)
-    return f"{evt.event_id} {evt.alt_tip}" + (f" [{s}]" if s else "")
+    return (f"{sn_mmss(evt.t_start)} {evt.tip} - {evt.alt_tip} ({evt.event_id})"
+            + (f" [{s}]" if s else ""))
 
 
 def _izleri_ciz(img, izler, f: int) -> None:
@@ -107,6 +124,143 @@ def _izleri_ciz(img, izler, f: int) -> None:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, renk, 1, cv2.LINE_AA)
 
 
+CRF = 23  # 18 gorsel olarak kayipsiz, 28 belirgin bozulma; 23 kanit icin yeterli
+
+
+class _FFmpegYazici:
+    """Ham kareleri ffmpeg'e boru ile besleyen yazici.
+
+    Neden OpenCV yetmiyor: bu OpenCV derlemesi H.264 bit hizini AYARLAMIYOR -
+    OPENCV_FFMPEG_WRITER_OPTIONS (crf, video_bitrate) yok sayiliyor ve icerik
+    ne olursa olsun ~24 Mbit/sn sabit yaziyor. 5 dakikalik 720p bir video 963 MB
+    cikiyordu (kaynak 24 MB). CRF ile ayni goruntu ~40 MB.
+
+    Ayrica -movflags +faststart: moov atomu dosya BASINA tasinir, boylece
+    tarayici dosyanin tamami inmeden oynatmaya baslar. 5 dakikalik bir kayitta
+    fark "aninda oynuyor" ile "once tamamini indir" arasindadir.
+
+    cv2.VideoWriter arayuzunu taklit eder (write/release/isOpened) - cagiran
+    taraf hangi yazicinin kullanildigini bilmez.
+    """
+
+    def __init__(self, exe: str, out_path: Path, fps: float, w: int, h: int):
+        import subprocess
+
+        self._p = subprocess.Popen(
+            [exe, "-y", "-loglevel", "error",
+             "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}",
+             "-r", f"{fps:.6f}", "-i", "-",
+             "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+             "-crf", str(CRF), "-preset", "veryfast",
+             "-movflags", "+faststart", str(out_path)],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+
+    def write(self, img) -> None:
+        try:
+            self._p.stdin.write(img.tobytes())
+        except (BrokenPipeError, OSError):
+            pass  # ffmpeg oldu; release() cikis kodunu raporlar
+
+    def isOpened(self) -> bool:
+        return True
+
+    def release(self) -> None:
+        if self._p.stdin and not self._p.stdin.closed:
+            try:
+                self._p.stdin.close()
+            except OSError:
+                pass
+        if self._p.wait() != 0:
+            print(f"[UYARI] ffmpeg kodlama hatasi (cikis {self._p.returncode})")
+
+
+def _ffmpeg_yolu() -> str | None:
+    """Varsa ffmpeg calistirilabiliri. Zorunlu bagimlilik DEGILDIR."""
+    import shutil
+
+    p = shutil.which("ffmpeg")
+    if p:
+        return p
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001 - yoksa OpenCV yazicisina dusulur
+        return None
+
+
+def _yazici(out_path: Path, fps: float, w: int, h: int):
+    """MP4 yazici - TARAYICIDA OYNAYAN kodekle.
+
+    mp4v (MPEG-4 Part 2) hicbir tarayicida oynamaz: .mp4 yalnizca KAPTIR,
+    tarayici icindeki kodege bakar ve Chrome/Firefox/Edge/Safari H.264 (avc1),
+    VP8/9 veya AV1 ister. mp4v ile uretilen dosya VLC'de acilir, sunucu 200
+    doner, oynatici siyah kalir - hata hicbir yerde gorunmedigi icin en can
+    sikici hali.
+
+    Sira: ffmpeg (H.264 + makul boyut + faststart) -> OpenCV avc1 (H.264 ama
+    cok buyuk) -> OpenCV mp4v (SON CARE, tarayicida oynamaz, sebebi yazilir).
+    """
+    exe = _ffmpeg_yolu()
+    if exe:
+        return _FFmpegYazici(exe, out_path, fps, w, h)
+    yz = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"avc1"), fps, (w, h))
+    if yz.isOpened():
+        return yz
+    print(f"[UYARI] H.264 kodlayici yok - {out_path.name} mp4v ile yaziliyor ve "
+          "TARAYICIDA OYNAMAZ (VLC'de acilir). Cozum: pip install imageio-ffmpeg")
+    return cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+
+
+def _olay_plani(events: list[Event], fps: float) -> tuple[dict[int, list], dict[int, list]]:
+    """(kare -> kutular, kare -> bant etiketleri) planini uretir.
+
+    Kanit karesi (`evidence["kareler"]`) cogu olayda yalnizca birkac karedir;
+    sadece o karelere cizmek 5 dakikalik videoda kazayi 2 kare gosterir ve
+    izlerken FARK EDILMEZ. Kutu olayin TUM suresi boyunca tutulur, kanit
+    kareleri arasindaki bosluklarda en yakin bilinen kutuya yapisir.
+
+    Ayrica her olay en az _ASGARI_SN saniye ekranda kalir: bir karelik bir
+    ihlal de izleyicinin gorebilecegi kadar surer.
+    """
+    kutular: dict[int, list] = {}
+    bantlar: dict[int, list] = {}
+    asgari = max(1, int(fps * _ASGARI_SN))
+    for evt in events:
+        renk = _RENK.get(_siddet_of(evt), _VARSAYILAN_RENK)
+        etiket = _etiket(evt)
+        kareler = {int(f): b for f, b in (evt.evidence.get("kareler") or {}).items()}
+        if not kareler:
+            continue
+        bilinen = sorted(kareler)
+        bas = max(0, min(evt.frame_start, bilinen[0]))
+        son = max(evt.frame_end, bilinen[-1], bas + asgari - 1)
+        i = 0
+        for f in range(bas, son + 1):
+            # En yakin bilinen kanit karesine tutun (tek yonlu tarama).
+            while i + 1 < len(bilinen) and abs(bilinen[i + 1] - f) <= abs(bilinen[i] - f):
+                i += 1
+            kutular.setdefault(f, []).append((kareler[bilinen[i]], etiket, renk))
+            bantlar.setdefault(f, []).append((etiket, renk))
+    return kutular, bantlar
+
+
+def _bant_ciz(img, etiketler: list, w: int) -> None:
+    """Ust bant: olay suresince ekranda kalan okunakli uyari seridi.
+
+    Kucuk veya kare kenarindaki kutu gozden kacar; bant kacmaz.
+    """
+    yuk = 24 * len(etiketler)
+    bolge = img[0:yuk, 0:w]
+    koyu = bolge.copy()
+    koyu[:] = (0, 0, 0)
+    cv2.addWeighted(koyu, 0.5, bolge, 0.5, 0, bolge)
+    for i, (etiket, renk) in enumerate(etiketler):
+        cv2.putText(img, etiket, (10, 17 + i * 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, renk, 2, cv2.LINE_AA)
+
+
 def annotate_video(video: str | Path, events: list[Event], out_path: str | Path,
                    izler: list | None = None, kvkk: dict | None = None,
                    izleri_ciz: bool = False) -> Path:
@@ -122,16 +276,18 @@ def annotate_video(video: str | Path, events: list[Event], out_path: str | Path,
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # ATOMIK YAZIM: once yan dosyaya yaz, bitince yerine tasi.
+    #
+    # Bu dosya ayni anda tarayiciya SUNULUYOR. Uzerine dogrudan yazmak izleyene
+    # yarim bir MP4 gosterir: sure bilgisi henuz yazilmadigi icin oynatici
+    # birkac saniye sonra videoyu bitmis sayip sona atlar. Yeniden analiz her
+    # zaman mumkun oldugundan bu "arada bir" degil HER kosuda olurdu.
+    # Uzanti KORUNUR: ffmpeg kap bicimini uzantidan secer, ".yaziliyor" ile
+    # biten bir ada yazamaz. Ad "*_annotated.mp4" kalibina da uymaz, boylece
+    # api._isaretli_video() yarim dosyayi bulup sunmaz.
+    gecici = out_path.with_name(f"{out_path.stem}.yaziliyor{out_path.suffix}")
 
-    # frame_idx -> [(bbox, etiket, renk)]
-    plan: dict[int, list] = {}
-    watermark = False
-    for evt in events:
-        renk = _RENK.get(_siddet_of(evt), _VARSAYILAN_RENK)
-        etiket = _etiket(evt)
-        watermark |= evt.tip in ("KAZA", "IHLAL")
-        for f, bbox in (evt.evidence.get("kareler") or {}).items():
-            plan.setdefault(int(f), []).append((bbox, etiket, renk))
+    watermark = any(evt.tip in ("KAZA", "IHLAL") for evt in events)
 
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
@@ -139,7 +295,8 @@ def annotate_video(video: str | Path, events: list[Event], out_path: str | Path,
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    plan, bantlar = _olay_plani(events, fps)
+    writer = _yazici(gecici, fps, w, h)
     try:
         idx = 0
         while True:
@@ -151,9 +308,11 @@ def annotate_video(video: str | Path, events: list[Event], out_path: str | Path,
                 _izleri_ciz(img, izler, idx)
             for bbox, etiket, renk in plan.get(idx, []):
                 x1, y1, x2, y2 = bbox
-                cv2.rectangle(img, (x1, y1), (x2, y2), renk, 2)
+                cv2.rectangle(img, (x1, y1), (x2, y2), renk, 3)
                 cv2.putText(img, etiket, (x1, max(14, y1 - 6)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, renk, 1, cv2.LINE_AA)
+            if idx in bantlar:
+                _bant_ciz(img, bantlar[idx], w)
             if watermark:
                 cv2.putText(img, _FILIGRAN, (8, h - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
@@ -162,13 +321,27 @@ def annotate_video(video: str | Path, events: list[Event], out_path: str | Path,
     finally:
         cap.release()
         writer.release()
+    # os.replace atomiktir: izleyen ya ESKI ya YENI dosyayi gorur, yarisini asla.
+    os.replace(gecici, out_path)
     return out_path
 
 
+ON_TAMPON_SN = 3.0    # olaydan ONCE gosterilecek sure
+ARKA_TAMPON_SN = 2.0  # olaydan SONRA gosterilecek sure
+
+
 def save_clip(video: str | Path, frame_start: int, frame_end: int,
-              out_path: str | Path, tampon: int = 15,
+              out_path: str | Path, tampon: int | None = None,
               izler: list | None = None, kvkk: dict | None = None) -> Path | None:
     """Olay araligini ayri bir MP4 olarak kesip yazar. Kare yazilamazsa None.
+
+    Tampon ASIMETRIKTIR ve saniye cinsindendir. Onceki hali iki yana da 15 kare
+    (30 fps'te 0.5 sn) koyuyordu; olayin kendisi 2+ saniye surdugu icin klip
+    neredeyse tamamen carpisma SONRASINI gosteriyor, izleyen "kaza nerede?"
+    diye soruyordu. Kanit klibi olayin BASLADIGI ani icermeli: yaklasma ->
+    carpma -> sonrasi. Bu yuzden one 3 sn, arkaya 2 sn.
+
+    `tampon` (kare cinsinden) verilirse iki yana da o uygulanir - eski davranis.
 
     ponytail: OpenCV ile yeniden kodlar (kalite/hiz kaybi). ffmpeg -ss ile
     kodlamadan kesmek daha iyi olurdu; ffmpeg zorunlu bagimlilik olmasin diye
@@ -184,11 +357,12 @@ def save_clip(video: str | Path, frame_start: int, frame_end: int,
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        bas = max(0, frame_start - tampon)
-        son = frame_end + tampon
+        on = tampon if tampon is not None else int(fps * ON_TAMPON_SN)
+        arka = tampon if tampon is not None else int(fps * ARKA_TAMPON_SN)
+        bas = max(0, frame_start - on)
+        son = frame_end + arka
         cap.set(cv2.CAP_PROP_POS_FRAMES, bas)
-        writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"),
-                                 fps, (w, h))
+        writer = _yazici(out_path, fps, w, h)
         try:
             for i in range(son - bas + 1):
                 ok, img = cap.read()
@@ -245,7 +419,7 @@ def annotate_tracks(video: str | Path, izler: list, out_path: str | Path,
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    writer = _yazici(out_path, fps, w, h)
     try:
         idx = 0
         while True:
@@ -271,9 +445,44 @@ def annotate_tracks(video: str | Path, izler: list, out_path: str | Path,
     return out_path
 
 
+def read_tracks(path: str | Path) -> list:
+    """izler.json'u Track listesine geri cevirir (kareler=True ile yazilmissa).
+
+    Amaci tek sey: tespit esigini degistirdiginde YOLO'yu BASTAN calistirmamak.
+    5 dakikalik videoda takip ~17 dakika surer; ayni izlerden kaza/ihlali
+    yeniden hesaplamak saniyeler. Esik denemesi bu ikisi arasindaki farktir.
+    """
+    from adgs.schema import Detection, Track
+
+    d = json.loads(Path(path).read_text(encoding="utf-8"))
+    izler = []
+    for t in d.get("izler") or []:
+        kareler = t.get("kareler")
+        if not kareler:
+            continue  # ozet-only dosya: yeniden tespit icin kullanilamaz
+        iz = Track(track_id=t["track_id"], cls=t.get("cls", ""),
+                   plate=t.get("plaka"), plate_conf=t.get("plaka_conf", 0.0))
+        for f, v in kareler.items():
+            x1, y1, x2, y2 = v[:4]
+            iz.frames[int(f)] = Detection(
+                bbox=(int(x1), int(y1), int(x2), int(y2)), cls=iz.cls,
+                conf=float(v[4]) if len(v) > 4 else 0.0)
+        dunya = t.get("dunya") or {}
+        if dunya:
+            iz.world_xy = {int(f): (float(a), float(b))
+                           for f, (a, b) in dunya.items()}
+        izler.append(iz)
+    return izler
+
+
 def write_tracks(izler: list, out_path: str | Path, source: str = "",
-                 kalib=None) -> Path:
-    """M2 takip ciktisini JSON'a yazar (Faz 2 teslimati)."""
+                 kalib=None, kareler: bool = False) -> Path:
+    """M2 takip ciktisini JSON'a yazar (Faz 2 teslimati).
+
+    `kareler=True` ise kare bazli kutular da yazilir ve dosya read_tracks ile
+    geri okunabilir - esikleri yeniden TAKIP ETMEDEN denemek icin. Ozet dosya
+    kucuk kalsin diye varsayilan kapali.
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -285,7 +494,7 @@ def write_tracks(izler: list, out_path: str | Path, source: str = "",
             "notlar": list(getattr(kalib, "notlar", [])),
         },
         "iz_sayisi": len(izler),
-        "uyari": "Bu cikti bir karar destek analizidir; baglayici bir tespit degildir.",
+        "uyari": "Bu çıktı bir karar destek analizidir; bağlayıcı bir tespit değildir.",
         "izler": [
             {
                 "track_id": iz.track_id,
@@ -296,11 +505,20 @@ def write_tracks(izler: list, out_path: str | Path, source: str = "",
                 "plaka": iz.plate,
                 "plaka_conf": iz.plate_conf,
                 "dunya_koordinatli_kare": len(iz.world_xy or {}),
+                # [x1, y1, x2, y2, conf] - read_tracks bunu geri kurar.
+                **({"kareler": {str(f): [*d.bbox, round(d.conf, 3)]
+                                for f, d in sorted(iz.frames.items())},
+                    "dunya": {str(f): [round(x, 3), round(y, 3)]
+                              for f, (x, y) in (iz.world_xy or {}).items()}}
+                   if kareler else {}),
             }
             for iz in izler
         ],
     }
-    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Kare bazli dokum buyuk olur; indent yalnizca ozet dosyada.
+    out_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=None if kareler else 2),
+        encoding="utf-8")
     return out_path
 
 
@@ -320,7 +538,7 @@ def write_report(events: list[Event], out_path: str | Path, source: str = "",
         "olay_sayisi": len(kanitli),
         "kanitsiz_atlanan": len(events) - len(kanitli),
         "calisamayan_moduller": list(uyarilar or []),
-        "uyari": "Bu rapor bir karar destek ciktisidir; baglayici bir tespit degildir.",
+        "uyari": "Bu rapor bir karar destek çıktısıdır; bağlayıcı bir tespit değildir.",
         "events": [asdict(e) for e in kanitli],
     }
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

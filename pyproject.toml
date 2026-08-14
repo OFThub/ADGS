@@ -11,6 +11,12 @@ dependencies = [
     # hasari tekillestirmesi buna bagli.
     "lap>=0.5",
     "opencv-python>=4.10",
+    # Isaretli videoyu TARAYICIDA oynayan boyutta yazmak icin ffmpeg ikilisi.
+    # opencv-python H.264 bit hizini AYARLAMIYOR (OPENCV_FFMPEG_WRITER_OPTIONS
+    # yok sayiliyor) ve 5 dakikalik 720p videoyu 963 MB yaziyor; ayni goruntu
+    # ffmpeg + CRF ile 34 MB. Ayrica +faststart ile video tamamen inmeden
+    # oynamaya basliyor. Bulunamazsa render OpenCV'ye duser - zorunlu degil.
+    "imageio-ffmpeg>=0.5",
     "pyyaml>=6.0",
     "pydantic>=2.9",
 ]

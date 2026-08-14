@@ -105,6 +105,104 @@ def kamera_kaymasi(video: str | Path, ornek: int = _ORNEK_SAYISI) -> float | Non
         cap.release()
 
 
+# Gece/dusuk isik esigi ve o durumda kullanilacak guven esigi.
+#
+# OLCULDU (bu depodaki 16 sahne, HSV V kanali medyani):
+#   gunduz sahneler      126 - 154
+#   alacakaranlik        104
+#   gece (islak zemin)    81 -  87
+#
+# Ayni gece sahnesinde arac tespiti (17 karede toplam):
+#   ham conf 0.35 ->  0     <- varsayilan ayar hicbir sey bulamiyordu
+#   ham conf 0.15 ->  9
+#   CLAHE     .35 ->  1
+#   CLAHE     .15 ->  8     <- CLAHE kayda deger katki yapmiyor
+#   CLAHE     .08 -> 32     <- yanlis pozitif riski yuksek
+# Bu yuzden cozum on isleme degil, gece sahnesinde guven esigini dusurmek.
+GECE_ESIGI = 100.0
+GECE_CONF = 0.15
+VARSAYILAN_CONF = 0.35
+
+KESME_ESIGI = 0.35  # ardisik karelerin histogram korelasyonu bunun altina duserse kesme
+
+
+def isik_seviyesi(video: str | Path, ornek: int = 6) -> float | None:
+    """Sahnenin medyan parlakligi (HSV V kanali, 0-255).
+
+    Medyan: tek bir far parlamasi veya karartma ortalamayi bozar, medyani bozmaz.
+    """
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        return None
+    try:
+        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        if n < 1:
+            return None
+        vals = []
+        for i in range(ornek):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(i * max(0, n - 1) / max(ornek, 1)))
+            ok, img = cap.read()
+            if ok:
+                k = cv2.resize(img, (160, 90), interpolation=cv2.INTER_AREA)
+                vals.append(float(cv2.cvtColor(k, cv2.COLOR_BGR2HSV)[:, :, 2].mean()))
+        return statistics.median(vals) if vals else None
+    finally:
+        cap.release()
+
+
+def _conf_coz(isik: float | None) -> tuple[float, str]:
+    """(guven esigi, gerekce) - gece sahnesinde esik dusurulur."""
+    if isik is None:
+        return VARSAYILAN_CONF, (
+            f"guven esigi: isik olculemedi -> varsayilan {VARSAYILAN_CONF}")
+    if isik < GECE_ESIGI:
+        return GECE_CONF, (
+            f"guven esigi: sahne parlakligi {isik:.0f}/255 < {GECE_ESIGI:.0f}"
+            f" (gece/dusuk isik) -> esik {GECE_CONF} kullanildi."
+            " Gece kayitlarinda arac isik lekesine dondugu icin varsayilan esik"
+            " hic tespit uretmiyordu; dusuk esik YANLIS POZITIF riskini artirir.")
+    return VARSAYILAN_CONF, (
+        f"guven esigi: sahne parlakligi {isik:.0f}/255 -> varsayilan"
+        f" {VARSAYILAN_CONF}")
+
+
+def sahne_kesmeleri(video: str | Path, esik: float = KESME_ESIGI) -> list[int]:
+    """Sahne kesmesi olan kare numaralari (montaj/derleme videolar icin).
+
+    Neden gerekli: sistem TEK SUREKLI kamera varsayar. Derleme videoda kesme
+    aninda izler aniden biter, farkli sahnelerin kutulari cakisir ve konum
+    sicramasi "ani hareket degisimi" sinyalini TAKLIT eder. Olculdu: 5 dakikalik
+    bir derlemede sinyal-2'yi gecen 14 adayin 10'u kesme kaynakliydi.
+
+    Olcum HSV histogram korelasyonu: kamera degisince renk dagilimi da degisir.
+    Piksel farki yerine histogram, cunku hizli pan da buyuk piksel farki uretir
+    ama renk dagilimini buyuk olcude korur.
+    """
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        return []
+    kesmeler: list[int] = []
+    onceki = None
+    idx = 0
+    try:
+        while True:
+            ok, img = cap.read()
+            if not ok:
+                break
+            k = cv2.resize(img, (160, 90), interpolation=cv2.INTER_AREA)
+            hsv = cv2.cvtColor(k, cv2.COLOR_BGR2HSV)
+            h = cv2.calcHist([hsv], [0, 1], None, [32, 32], [0, 180, 0, 256])
+            cv2.normalize(h, h, 0, 1, cv2.NORM_MINMAX)
+            if onceki is not None and \
+                    cv2.compareHist(onceki, h, cv2.HISTCMP_CORREL) < esik:
+                kesmeler.append(idx)
+            onceki = h
+            idx += 1
+    finally:
+        cap.release()
+    return kesmeler
+
+
 def _profil_coz(kayma: float | None) -> tuple[str, str, str]:
     """(profil, detect, gerekce) - olcum yoksa veya kararsizsa ikisi de calisir."""
     if kayma is None:
@@ -113,9 +211,15 @@ def _profil_coz(kayma: float | None) -> tuple[str, str, str]:
                 " -> tahmin edilmedi, iki dedektor ailesi de calisti")
     y = f"%{kayma * 100:.2f}"
     if kayma < SABIT_UST:
-        return ("cctv_fixed", "accident,ihlal",
+        # Yol hasari sabit kamerada DA taranir: kavsakta da cukur olabilir ve
+        # kullanici "kaza veya yol hasari olunca goster" istedi. Ancak RDD2022
+        # tamamen ARACA MONTELI, yol seviyesi goruntudur; sabit CCTV'nin egik
+        # ve uzak acisinda cukur birkac piksele duser - getirisi dusuktur ve
+        # buldugu seyler dogrulanmalidir (plan, varsayim duzeltmesi 2).
+        return ("cctv_fixed", "accident,ihlal,roaddamage",
                 f"profil: kamera kaymasi {y} < %{SABIT_UST * 100:.0f}"
-                " -> sabit kamera (kaza + ihlal taramasi)")
+                " -> sabit kamera (kaza + ihlal; yol hasari da taranir ama"
+                " sabit CCTV acisi bu model icin uygun degil)")
     if kayma > HAREKETLI_ALT:
         return ("vehicle_mounted", "roaddamage",
                 f"profil: kamera kaymasi {y} > %{HAREKETLI_ALT * 100:.0f}"
@@ -126,11 +230,17 @@ def _profil_coz(kayma: float | None) -> tuple[str, str, str]:
             " -> tahmin edilmedi, iki dedektor ailesi de calisti")
 
 
-def tarih_bul(ad: str, bugun: date | None = None) -> tuple[str | None, str]:
-    """Dosya adindaki cekim tarihi. Bulunamazsa None - bugune DUSULMEZ.
+def tarih_bul(ad: str, bugun: date | None = None,
+              bugune_dus: bool = False) -> tuple[str | None, str]:
+    """Dosya adindaki cekim tarihi.
 
     CCTV/DVR disa aktarimlari tarihi dosya adinda tasir; bu kurulumda
     okunabilen tek kaynak o (ffprobe yok, OpenCV kayit tarihini vermiyor).
+
+    `bugune_dus=True` ise okunamayan tarih icin BUGUN kullanilir. Bu bir
+    OLCUM DEGIL VARSAYIMDIR ve gerekcede "VARSAYILDI" diye isaretlenir:
+    arsiv videosu bugunun ceza tablosuyla hesaplanirsa tutar yanlis cikar.
+    Isaretin amaci, yanlis cikma ihtimalinin ciktida gorunur kalmasi.
     """
     bugun = bugun or date.today()
     for desen, (y, a, g) in _TARIH_DESENLERI:
@@ -144,6 +254,11 @@ def tarih_bul(ad: str, bugun: date | None = None) -> tuple[str | None, str]:
         if d > bugun:
             continue  # gelecek tarih cekim tarihi olamaz
         return d.isoformat(), f"tarih: dosya adindan okundu ({d.isoformat()})"
+    if bugune_dus:
+        return bugun.isoformat(), (
+            f"tarih: dosya adinda yok -> BUGUN VARSAYILDI ({bugun.isoformat()})."
+            " Olculmus bir cekim tarihi DEGILDIR; video arsivden ise o gunun"
+            " ceza tablosu secilmemis olur ve tutar yanlis cikabilir.")
     return None, ("tarih: dosya adinda cekim tarihi yok -> BOS birakildi"
                   " (ceza tablosu secilemez, tutar hesaplanmaz)")
 
@@ -172,7 +287,7 @@ def kamera_bul(ad: str, dizin: Path) -> tuple[str | None, str]:
 
 
 def incele(video: str | Path, kamera_dizini: Path | None = None,
-           bugun: date | None = None) -> dict:
+           bugun: date | None = None, tarih_bugune_dus: bool = True) -> dict:
     """Videoyu inceleyip cli.run parametrelerini uretir.
 
     Donen sozluk dogrudan cli.run'a beslenir:
@@ -186,13 +301,17 @@ def incele(video: str | Path, kamera_dizini: Path | None = None,
                               / "config" / "cameras")
     kayma = kamera_kaymasi(p)
     profil, detect, g_profil = _profil_coz(kayma)
-    tarih, g_tarih = tarih_bul(p.name, bugun=bugun)
+    tarih, g_tarih = tarih_bul(p.name, bugun=bugun, bugune_dus=tarih_bugune_dus)
     kamera, g_kamera = kamera_bul(p.name, dizin)
+    isik = isik_seviyesi(p)
+    conf, g_conf = _conf_coz(isik)
     return {
         "profile": profil,
         "detect": detect,
         "camera": kamera,
         "tarih": tarih,
+        "conf": conf,
         "kamera_kaymasi": kayma,
-        "gerekce": [g_profil, g_tarih, g_kamera],
+        "isik": isik,
+        "gerekce": [g_profil, g_tarih, g_kamera, g_conf],
     }

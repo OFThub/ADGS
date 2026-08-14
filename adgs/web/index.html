@@ -124,8 +124,8 @@
     </div>
     <table id="tablo">
       <thead><tr>
-        <th>olay</th><th>tip</th><th>alt tip</th><th>kusur / ceza</th>
-        <th>tarih</th><th>güven</th><th>kanıt</th>
+        <th>olay</th><th>video</th><th>zaman</th><th>tip</th><th>alt tip</th>
+        <th>kusur / ceza</th><th>tarih</th><th>güven</th><th>kanıt</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -163,6 +163,38 @@ const TIPLER = ["KAZA", "IHLAL", "ALTYAPI"];
 const SINIFLAR = ["ASLI", "TALI", "TESPIT_EDILEMEDI"];
 const rozet = (deger, beyaz) =>
   el("span", deger, "rozet " + (beyaz.includes(deger) ? deger : ""));
+
+function mmss(sn) {
+  if (sn == null || isNaN(sn)) return "—";
+  const s = Math.max(0, Math.floor(sn));
+  return String(Math.floor(s / 60)).padStart(2, "0") + ":" +
+         String(s % 60).padStart(2, "0");
+}
+
+// Zamana tiklayinca oynatici o ana atlar. 5 dakikalik bir kayitta olayi elle
+// aramak ise yaramaz; "hangi saniye" sorusunun karsiligi tiklanabilir olmali.
+function zamanHucresi(o) {
+  const td = el("td");
+  if (o.t_start == null) { td.textContent = "—"; return td; }
+  const a = el("a", mmss(o.t_start));
+  a.href = "#oynatici";
+  a.title = `${o.t_start.toFixed(1)} sn — videoda bu ana git`;
+  a.onclick = (e) => { e.stopPropagation(); atla(o); };
+  td.append(a);
+  return td;
+}
+
+function atla(o) {
+  const oyn = $("#oynatici"), sec = $("#videoSec");
+  if (o.video_id != null && sec.value !== String(o.video_id)) {
+    sec.value = String(o.video_id);
+    videoyuGoster();
+  }
+  const git = () => { oyn.currentTime = Math.max(0, o.t_start - 1); oyn.play(); };
+  if (oyn.readyState >= 1) git();
+  else oyn.addEventListener("loadedmetadata", git, { once: true });
+  oyn.scrollIntoView({ behavior: "smooth", block: "center" });
+}
 
 function kusurHucresi(o) {
   const td = el("td");
@@ -227,14 +259,17 @@ async function olaylariYukle() {
     idHucre.append(el("code", o.event_id));
     const tipHucre = el("td");
     tipHucre.append(rozet(o.tip, TIPLER));
-    tr.append(idHucre, tipHucre, el("td", o.alt_tip ?? "—"), kusurHucresi(o),
-              el("td", o.cekim_tarihi ?? "—"), el("td", o.conf ?? "—"),
-              kanitHucresi(o));
+    // olay_id yalnizca video ICINDE benzersiz; video sutunu olmadan iki ayri
+    // videonun kaza_0001'i ayni satir gibi gorunuyordu.
+    tr.append(idHucre, el("td", o.video_id != null ? "#" + o.video_id : "—"),
+              zamanHucresi(o), tipHucre, el("td", o.alt_tip ?? "—"),
+              kusurHucresi(o), el("td", o.cekim_tarihi ?? "—"),
+              el("td", o.conf ?? "—"), kanitHucresi(o));
 
     const detay = el("tr", null, "detay");
     detay.style.display = "none";
     const dHucre = el("td");
-    dHucre.colSpan = 7;
+    dHucre.colSpan = 9;
     dHucre.append(el("pre", (o.notlar || []).map(n => "• " + n).join("\n")));
     detay.append(dHucre);
 
@@ -246,7 +281,7 @@ async function olaylariYukle() {
   }
   if (!d.events.length) {
     const bos = el("td", "Kayıt yok.", "bos");
-    bos.colSpan = 7;
+    bos.colSpan = 9;
     const satir = el("tr");
     satir.append(bos);
     tb.append(satir);

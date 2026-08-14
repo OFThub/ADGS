@@ -136,9 +136,10 @@ def analiz(olaylar: list[dict],
         "gps_li_olay": sum(1 for o in olaylar if _gps(o) is not None),
         "cografi_kumeler": kumele(olaylar, yaricap_m),
         "kamera_gruplari": kamera_bazli(olaylar),
+        # Kullaniciya GOSTERILEN metin - tam Turkce (bkz. api.olaylar).
         "uyari": (
-            "Kara nokta analizi bir PLANLAMA ciktisidir; kusur veya ceza "
-            "dogurmaz. Agirliklar goreli siralama olcegidir, mutlak risk skoru "
-            "degildir - gercek analiz yaralanma ve maddi hasar verisi gerektirir."
+            "Kara nokta analizi bir PLANLAMA çıktısıdır; kusur veya ceza "
+            "doğurmaz. Ağırlıklar göreli sıralama ölçeğidir, mutlak risk skoru "
+            "değildir — gerçek analiz yaralanma ve maddi hasar verisi gerektirir."
         ),
     }

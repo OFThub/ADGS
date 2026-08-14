@@ -132,7 +132,7 @@ def test_gpsli_ve_gpssiz_KARISTIRILMAZ():
 def test_analiz_planlama_uyarisi_tasir():
     d = hotspot.analiz([])
     assert "PLANLAMA" in d["uyari"]
-    assert "kusur veya ceza dogurmaz" in d["uyari"]
+    assert "kusur veya ceza doğurmaz" in d["uyari"]
 
 
 def test_bos_girdi_cokme_yapmaz():

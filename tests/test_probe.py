@@ -98,7 +98,8 @@ def test_okunamayan_video_tahmin_etmiyor(tmp_path: Path):
 def test_her_karara_gerekce_yaziliyor(sabit_video: Path):
     """Turetilmis parametre gerekcesiz gosterilmez - kullanici neden'i gorur."""
     d = probe.incele(sabit_video)
-    assert len(d["gerekce"]) == 3
+    # profil, tarih, kamera, guven esigi
+    assert len(d["gerekce"]) == 4
     assert all(g.strip() for g in d["gerekce"])
 
 
@@ -164,3 +165,118 @@ def test_kamera_kimligi_bicim_suzgecinden_geciyor(tmp_path: Path):
     (d / "adgs_test_bicimsiz name.yaml").write_text("x: 1", encoding="utf-8")
     k, _ = probe.kamera_bul("adgs_test_bicimsiz name.mp4", d)
     assert k is None
+
+
+# --- Tarih verilmemisse bugune dusme (kullanici istegi) ----------------------
+
+
+def test_tarih_okunamazsa_bugun_varsayiliyor():
+    """Kullanici istegi: tarih yoksa SIMDI baz alinsin."""
+    t, gerekce = probe.tarih_bul("kavsak.mp4", bugun=date(2026, 8, 13),
+                                 bugune_dus=True)
+    assert t == "2026-08-13"
+
+
+def test_varsayilan_tarih_varsayim_oldugunu_soyluyor():
+    """Olculmus tarihle varsayilan tarih ciktida ayirt edilebilmeli.
+
+    Arsiv videosu bugunun ceza tablosuyla hesaplanirsa tutar yanlis cikar;
+    bu ihtimalin gorunur kalmasi icin gerekce VARSAYILDI diye isaretlenir.
+    """
+    _, gerekce = probe.tarih_bul("kavsak.mp4", bugun=date(2026, 8, 13),
+                                 bugune_dus=True)
+    assert "VARSAYILDI" in gerekce
+    assert "yanlis cikabilir" in gerekce
+
+
+def test_dosya_adindaki_tarih_varsayima_tercih_ediliyor():
+    """Gercek tarih varsa bugune DUSULMEZ."""
+    t, gerekce = probe.tarih_bul("kavsak_2026-07-15.mp4", bugun=date(2026, 8, 13),
+                                 bugune_dus=True)
+    assert t == "2026-07-15"
+    assert "VARSAYILDI" not in gerekce
+
+
+def test_incele_varsayilan_olarak_bugune_dusuyor(sabit_video):
+    """Yukleme yolunda tarih artik bos kalmiyor."""
+    d = probe.incele(sabit_video, bugun=date(2026, 8, 13))
+    assert d["tarih"] == "2026-08-13"
+    assert any("VARSAYILDI" in g for g in d["gerekce"])
+
+
+# --- Sahne kesmesi ----------------------------------------------------------
+
+
+def test_sahne_kesmesi_bulunuyor(tmp_path: Path):
+    """Iki farkli sahnenin birlestigi kare kesme olarak isaretlenmeli."""
+    rng = np.random.default_rng(1)
+    mavi = np.zeros((90, 160, 3), np.uint8); mavi[:, :, 0] = 220
+    kirmizi = np.zeros((90, 160, 3), np.uint8); kirmizi[:, :, 2] = 220
+    kareler = [mavi.copy() for _ in range(15)] + [kirmizi.copy() for _ in range(15)]
+    yol = _video_yaz(tmp_path / "kesmeli.mp4", kareler)
+    kesmeler = probe.sahne_kesmeleri(yol)
+    assert kesmeler, "kesme bulunamadi"
+    assert any(13 <= k <= 17 for k in kesmeler), f"kesme yeri yanlis: {kesmeler}"
+
+
+def test_tek_sahnede_kesme_yok(tmp_path: Path):
+    """Sabit sahne kesme uretmemeli - yoksa gecerli kazalar elenirdi."""
+    arka = _desenli_arkaplan()
+    kareler = []
+    for i in range(40):
+        k = arka.copy()
+        cv2.rectangle(k, (10 + i * 3, 100), (50 + i * 3, 140), (0, 0, 0), -1)
+        kareler.append(k)
+    yol = _video_yaz(tmp_path / "tek.mp4", kareler)
+    assert probe.sahne_kesmeleri(yol) == []
+
+
+def test_okunamayan_video_kesme_uretmiyor(tmp_path: Path):
+    bozuk = tmp_path / "bozuk.mp4"
+    bozuk.write_bytes(b"video degil")
+    assert probe.sahne_kesmeleri(bozuk) == []
+
+
+# --- Gece sahnesinde guven esigi --------------------------------------------
+#
+# OLCULDU: gece sahnesinde varsayilan esik (0.35) 17 karede 0 arac buldu,
+# 0.15 ile 9 arac. Gece kaydinda arac isik lekesine donuyor.
+
+
+def _duz_video(yol: Path, deger: int, n: int = 20) -> Path:
+    kare = np.full((90, 160, 3), deger, np.uint8)
+    return _video_yaz(yol, [kare.copy() for _ in range(n)])
+
+
+def test_gece_sahnesinde_esik_dusuruluyor(tmp_path: Path):
+    yol = _duz_video(tmp_path / "gece.mp4", 40)
+    isik = probe.isik_seviyesi(yol)
+    assert isik is not None and isik < probe.GECE_ESIGI
+    conf, gerekce = probe._conf_coz(isik)
+    assert conf == probe.GECE_CONF
+    assert "gece" in gerekce.lower()
+
+
+def test_gunduz_sahnesinde_varsayilan_esik(tmp_path: Path):
+    yol = _duz_video(tmp_path / "gunduz.mp4", 200)
+    conf, _ = probe._conf_coz(probe.isik_seviyesi(yol))
+    assert conf == probe.VARSAYILAN_CONF
+
+
+def test_dusuk_esik_yanlis_pozitif_riskini_soyluyor(tmp_path: Path):
+    """Esik dusurmek bedava degil - gerekce bunu yaziyor."""
+    _, gerekce = probe._conf_coz(50.0)
+    assert "YANLIS POZITIF" in gerekce
+
+
+def test_isik_olculemezse_varsayilan(tmp_path: Path):
+    bozuk = tmp_path / "bozuk.mp4"
+    bozuk.write_bytes(b"video degil")
+    assert probe.isik_seviyesi(bozuk) is None
+    assert probe._conf_coz(None)[0] == probe.VARSAYILAN_CONF
+
+
+def test_incele_conf_donduruyor(sabit_video):
+    d = probe.incele(sabit_video)
+    assert "conf" in d and 0 < d["conf"] <= 1
+    assert len(d["gerekce"]) == 4

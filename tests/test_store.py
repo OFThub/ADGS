@@ -199,3 +199,33 @@ def test_eksik_klip_dosyasi_cokme_yapmaz(conn):
     store.olaylari_kaydet(conn, vid, [_evt(klip="yok/olan/klip.mp4")])
     _eskit(conn, vid, 40)
     assert store.saklama_uygula(conn, gun=30)["silinen_klip"] == 0
+
+
+# --- Sunucu yeniden baslarsa yarida kalan kayitlar --------------------------
+
+
+def test_yarida_kalanlar_hata_olarak_isaretleniyor(tmp_path):
+    """Analiz sunucu sureci icinde calisir; surec olunce is kaybolur.
+
+    Kayit BEKLIYOR/ISLENIYOR kalirsa veritabani YALAN soyler: kullanici
+    "isleniyor" yazisina bakip bekler, video hicbir zaman gelmez.
+    """
+    conn = store.baglan(tmp_path / "t.db")
+    bekleyen = store.video_kaydet(conn, "a.mp4", durum="BEKLIYOR")
+    islenen = store.video_kaydet(conn, "b.mp4", durum="ISLENIYOR")
+    biten = store.video_kaydet(conn, "c.mp4", durum="TAMAM")
+
+    n = store.yarida_kalanlari_isaretle(conn)
+    assert n == 2
+    assert store.video_getir(conn, bekleyen)["durum"] == "HATA"
+    assert store.video_getir(conn, islenen)["durum"] == "HATA"
+    assert store.video_getir(conn, biten)["durum"] == "TAMAM"   # bitene dokunma
+    assert "yeniden baslatildi" in store.video_getir(conn, bekleyen)["hata"]
+    conn.close()
+
+
+def test_yarida_kalan_yoksa_sifir_doner(tmp_path):
+    conn = store.baglan(tmp_path / "t.db")
+    store.video_kaydet(conn, "c.mp4", durum="TAMAM")
+    assert store.yarida_kalanlari_isaretle(conn) == 0
+    conn.close()

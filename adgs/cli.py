@@ -183,8 +183,18 @@ def run(video: str, model: str, out: str, profile: str, conf: float,
         fps = _video_fps(src)
 
         if "accident" in tipler:
+            # Sahne kesmeleri: derleme/montaj videoda kesme kaza imzasini
+            # taklit eder (iz kopar, kutular cakisir, konum sicrar).
+            kesmeler = _sahne_kesmeleri(src)
+            if kesmeler:
+                uyarilar.append(
+                    f"{len(kesmeler)} sahne kesmesi bulundu - kaynak tek surekli "
+                    "kamera degil (montaj/derleme). Kesmeye yakin cakismalar "
+                    "degerlendirilmedi; takip kesmelerde koptugu icin bu "
+                    "kaynakta kaza tespiti GUVENILIR DEGILDIR.")
             kazalar = accident.tespit_et(izler, fps, str(src),
-                                         source_profile=profile, kalib=k)
+                                         source_profile=profile, kalib=k,
+                                         kesmeler=kesmeler)
             _klip_ekle(kazalar, src, outdir, izler, kvkk)
             # M8 - arac hasari (Faz 6). Arac kirpmasi cok kucukse sinif bazli
             # cikti URETILMEZ; sebep uyarilara yazilir.
@@ -224,6 +234,11 @@ def run(video: str, model: str, out: str, profile: str, conf: float,
                                 izler=izler, kvkk=kvkk, izleri_ciz=bool(izler))
     js = render.write_report(events, outdir / "rapor.json", source=str(src),
                              uyarilar=uyarilar)
+    # Izler kare bazli saklanir: esik degistiginde `adgs redetect` ile yeniden
+    # TAKIP ETMEDEN tespit calistirilabilir (17 dakika -> saniyeler).
+    if izler:
+        render.write_tracks(izler, outdir / "izler.json", source=str(src),
+                            kareler=True)
 
     print()
     print(f"{len(events)} olay")
@@ -374,6 +389,72 @@ def evaluate(model: str, data: str, imgsz: int, batch: int, hedef: float) -> int
         "zaman": _simdi(),
     })
     return 0 if ok else 1
+
+
+def rerender(rapor: str, video: str, out: str | None = None) -> int:
+    """Mevcut rapor.json'dan isaretli videoyu YENIDEN cizer.
+
+    Tespit TEKRAR CALISTIRILMAZ - olaylar rapordan okunur. Sebep: cizim veya
+    kodek degistiginde 5 dakikalik bir videoyu yeniden analiz etmek dakikalar
+    surer, oysa yalnizca yeniden cizmek videoyu bir kez okumak kadardir.
+    """
+    from adgs import render
+    from adgs import store as m10
+
+    r, v = Path(rapor), Path(video)
+    for p, ad in ((r, "rapor"), (v, "video")):
+        if not p.exists():
+            print(f"[FAIL] {ad} bulunamadi: {p}")
+            return 1
+    events = m10.olaylari_coz(r)
+    hedef = Path(out) if out else r.parent / f"{v.stem}_annotated.mp4"
+    print(f"{len(events)} olay yeniden ciziliyor -> {hedef}")
+    render.annotate_video(v, events, hedef, kvkk=_kvkk_ayari())
+    print(f"Video : {hedef}")
+    return 0
+
+
+def redetect(izler_json: str, video: str, tani: bool = False) -> int:
+    """Kaydedilmis izlerden kaza tespitini YENIDEN calistirir (takip yok).
+
+    `--tani` ile her aday cift icin HANGI SINYALIN elediği sayilir. "1 kaza
+    bulundu"nun sebebini tahmin etmek yerine olcmek icin: adaylarin kaci
+    okluzyon, kaci hareket sinyali, kaci hareketsizlik yuzunden dusuyor.
+    """
+    from adgs import accident, render
+
+    p_izler, p_video = Path(izler_json), Path(video)
+    if not p_izler.exists():
+        print(f"[FAIL] izler bulunamadi: {p_izler}")
+        return 1
+    izler = render.read_tracks(p_izler)
+    if not izler:
+        print(f"[FAIL] {p_izler} kare bazli kutu icermiyor "
+              "(eski bicim). Videoyu yeniden isleyin.")
+        return 1
+    fps = _video_fps(p_video) if p_video.exists() else 25.0
+    kesmeler = _sahne_kesmeleri(p_video)
+    print(f"{len(izler)} iz, fps={fps:.2f}, {len(kesmeler)} sahne kesmesi")
+
+    olaylar = accident.tespit_et(izler, fps, str(p_video), kesmeler=kesmeler)
+    print(f"\n{len(olaylar)} KAZA")
+    for e in olaylar:
+        print(f"  {render.sn_mmss(e.t_start)}  {e.event_id}  "
+              f"kare {e.frame_start}-{e.frame_end}  conf={e.conf}")
+
+    if tani:
+        print("\n--- TANI: aday ciftler neden elendi ---")
+        print(accident.tani_metni(izler, fps, kesmeler=kesmeler))
+    return 0
+
+
+def _sahne_kesmeleri(video: Path) -> set[int]:
+    """Videodaki sahne kesmeleri. Okunamazsa bos kume (kesme yok varsayilir)."""
+    if not video.exists():
+        return set()
+    from adgs import probe
+
+    return set(probe.sahne_kesmeleri(video))
 
 
 def kabul(json_bas: bool = False) -> int:
@@ -694,6 +775,21 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--hedef", default=0.45, type=float,
                    help="Faz 1 yol hasari kabul esigi")
 
+    rd = sub.add_parser("redetect",
+                        help="Kaydedilmis izlerden kaza tespitini yeniden "
+                             "calistirir (takip yok - saniyeler surer)")
+    rd.add_argument("izler", help="runs/<...>/izler.json")
+    rd.add_argument("--video", required=True, help="fps icin kaynak video")
+    rd.add_argument("--tani", action="store_true",
+                    help="Aday ciftleri hangi sinyalin eledigini sayar")
+
+    rr = sub.add_parser("rerender",
+                        help="rapor.json'dan isaretli videoyu yeniden cizer "
+                             "(tespit tekrar calismaz)")
+    rr.add_argument("rapor")
+    rr.add_argument("--video", required=True, help="Kaynak video")
+    rr.add_argument("--out", default=None)
+
     kb = sub.add_parser("kabul", help="TUM kabul kriterlerini olcer ve tablolar")
     kb.add_argument("--json", action="store_true",
                     help="Tabloyu JSON olarak bas (rapora gomulecekse)")
@@ -736,6 +832,10 @@ def main(argv: list[str] | None = None) -> int:
         return evaluate(args.model, args.data, args.imgsz, args.batch, args.hedef)
     if args.cmd == "kabul":
         return kabul(args.json)
+    if args.cmd == "rerender":
+        return rerender(args.rapor, args.video, args.out)
+    if args.cmd == "redetect":
+        return redetect(args.izler, args.video, args.tani)
     if args.cmd == "doctor":
         return doctor()
     if args.cmd == "run":

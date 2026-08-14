@@ -182,13 +182,13 @@ def olaylari_kaydet(conn: sqlite3.Connection, video_id: int,
     return n
 
 
-def rapordan_kaydet(conn: sqlite3.Connection, video_id: int,
-                    rapor: dict | str | Path) -> int:
-    """rapor.json (veya ayni yapidaki sozluk) icerigini veritabanina yazar.
+def olaylari_coz(rapor: dict | str | Path) -> list[Event]:
+    """rapor.json (veya ayni yapidaki sozluk) icerigini Event listesine cevirir.
 
     JSON, write_report'ta asdict(Event) ile uretildigi icin yapi Event ile
-    birebir aynidir; nesneler geri kurulup olaylari_kaydet'e verilir - ikinci
-    bir yazma mantigi yazilmaz.
+    birebir aynidir. Ayri fonksiyon olmasinin sebebi: hem veritabanina yazma
+    (rapordan_kaydet) hem de videoyu YENIDEN CIZME (cli.rerender) ayni cozmeyi
+    kullanir - iki kopya, iki farkli davranan cozucu demekti.
     """
     from adgs.schema import Party, Violation
 
@@ -217,7 +217,13 @@ def rapordan_kaydet(conn: sqlite3.Connection, video_id: int,
             gps=tuple(gps) if gps else None, parties=taraflar,
             notes=list(d.get("notes") or []),
         ))
-    return olaylari_kaydet(conn, video_id, events)
+    return events
+
+
+def rapordan_kaydet(conn: sqlite3.Connection, video_id: int,
+                    rapor: dict | str | Path) -> int:
+    """rapor.json icerigini veritabanina yazar."""
+    return olaylari_kaydet(conn, video_id, olaylari_coz(rapor))
 
 
 def _olay_sozluk(conn: sqlite3.Connection, satir: sqlite3.Row) -> dict:
